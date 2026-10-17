@@ -1,13 +1,13 @@
 [
   {
-    "pr": 6,
+    "pr": 10,
     "bug": "coupon applies twice",
     "lens": "Abuse",
     "expected": "$21.60",
     "buggy": "$19.44"
   },
   {
-    "pr": 7,
+    "pr": 11,
     "bug": null
   }
 ]

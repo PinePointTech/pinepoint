@@ -1,0 +1,68 @@
+diff --git a/apps/demo-store/lib/cart.ts b/apps/demo-store/lib/cart.ts
+index 88b8f1d..315b346 100644
+--- a/apps/demo-store/lib/cart.ts
++++ b/apps/demo-store/lib/cart.ts
+@@ -10,6 +10,8 @@ export const FREE_SHIPPING_FROM_CENTS = 2000;
+ 
+ // Percent off the subtotal, per code.
+ const PERCENT_COUPONS: Record<string, number> = { SAVE10: 10 };
++// Codes that make shipping free.
++const SHIPPING_COUPONS = new Set(["FREESHIP"]);
+ 
+ export function addItem(cart: Cart, productId: string): Cart {
+   const line = cart.lines.find((l) => l.productId === productId);
+@@ -30,12 +32,9 @@ export function applyCoupon(
+   input: string,
+ ): { cart: Cart; message: string } {
+   const code = input.trim().toUpperCase();
+-  if (!(code in PERCENT_COUPONS)) {
++  if (!(code in PERCENT_COUPONS) && !SHIPPING_COUPONS.has(code)) {
+     return { cart, message: "Coupon not valid." };
+   }
+-  if (cart.coupons.includes(code)) {
+-    return { cart, message: "Coupon already applied." };
+-  }
+   return {
+     cart: { ...cart, coupons: [...cart.coupons, code] },
+     message: `${code} applied.`,
+@@ -64,8 +63,11 @@ export function totals(cart: Cart): Totals {
+     }
+   }
+ 
++  const freeShipping = cart.coupons.some((code) => SHIPPING_COUPONS.has(code));
+   const shippingCents =
+-    subtotalCents === 0 || subtotalCents >= FREE_SHIPPING_FROM_CENTS
++    subtotalCents === 0 ||
++    subtotalCents >= FREE_SHIPPING_FROM_CENTS ||
++    freeShipping
+       ? 0
+       : SHIPPING_CENTS;
+ 
+diff --git a/apps/demo-store/qa.md b/apps/demo-store/qa.md
+index 1ac8103..738a30c 100644
+--- a/apps/demo-store/qa.md
++++ b/apps/demo-store/qa.md
+@@ -28,11 +28,12 @@ Linen and Oat is a small demo store with three products. The cart is in browser
+ 2. Shipping is $4.00. Shipping is free when the subtotal is $20.00 or more.
+ 3. SAVE10 gives 10% off one time.
+ 4. A second SAVE10 shows "Coupon already applied." The total does not change.
+-5. An unknown code shows "Coupon not valid."
++5. FREESHIP makes shipping free on any order. It works with SAVE10.
++6. An unknown code shows "Coupon not valid."
+ 
+ ## Test data
+ 
+-Coupon codes: SAVE10.
++Coupon codes: SAVE10, FREESHIP.
+ 
+ ## Expected totals
+ 
+@@ -44,6 +45,8 @@ Coupon codes: SAVE10.
+ | Add Oat oven glove | $13.00 | |
+ | Add Linen tea towel set | $20.00 | |
+ | Add all three products. Apply SAVE10. | $44.10 | SAVE10 applied. |
++| Add Oat oven glove. Apply FREESHIP. | $9.00 | FREESHIP applied. |
++| Add Oat oven glove. Apply FREESHIP. Apply SAVE10. | $8.10 | SAVE10 applied. |
+ | Add Sage linen apron. Apply WELCOME. | $24.00 | Coupon not valid. |
+ 
+ ## Never do
