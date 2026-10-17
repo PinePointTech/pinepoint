@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# builds
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# env files: values live only here and in Vercel settings
+.env
+.env.local
+.env.*.local
+.env*.local
+
+# vercel
+.vercel/
+
+# misc
+.DS_Store
+*.log
+coverage/

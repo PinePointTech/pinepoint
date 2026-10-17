@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* Placeholder tokens. The style pass (VI-19) replaces them. */
+@theme {
+  --color-pine-50: #f3f8f4;
+  --color-pine-600: #2f7a52;
+  --color-pine-900: #173d2a;
+}
+
+body {
+  background: #faf8f3;
+  color: #1c1f1d;
+}
