@@ -55,8 +55,10 @@ export async function createRun(input: CreateRunInput, missions: Mission[]): Pro
 
 /** The last `limit` runs, newest first, for the history list (plan section 9.2). */
 export async function listRecentRuns(limit = 10) {
+  // Every column except qa_md, which the history list does not need.
   return sql()`
-    select id, pr_url, owner, repo, pr_number, head_sha, author, preview_url, status, cost_usd, started_at, finished_at
+    select id, pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status,
+           review_id, review_posted_at, cost_usd, started_at, finished_at, next_start_at
     from runs order by started_at desc nulls last limit ${limit}
   `;
 }
