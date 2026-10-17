@@ -1,9 +1,11 @@
-// Placeholder from the VI-5 scaffold. VI-6 builds the store.
+import { Store } from "@/components/store";
+
 export default function Home() {
   return (
     <main>
-      <h1>PinePoint demo store</h1>
-      <p>The store is not ready.</p>
+      <h1>Linen and Oat</h1>
+      <p className="muted">Kitchen linens. Free shipping from $20.00.</p>
+      <Store />
     </main>
   );
 }

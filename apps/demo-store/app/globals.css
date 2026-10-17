@@ -1,0 +1,162 @@
+:root {
+  --bg: #faf8f3;
+  --card: #ffffff;
+  --text: #1c1f1d;
+  --muted: #5d655f;
+  --line: #e3e0d8;
+  --accent: #2f7a52;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-rounded, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+h1 {
+  margin: 0 0 4px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+@media (min-width: 768px) {
+  .layout {
+    grid-template-columns: 2fr 1fr;
+    align-items: start;
+  }
+}
+
+.products {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.card h3 {
+  margin: 0 0 4px;
+}
+
+.price {
+  font-weight: 600;
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--accent);
+  background: var(--card);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+button.primary {
+  width: 100%;
+  margin-top: 16px;
+  background: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.lines {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+}
+
+.lines li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.coupon label {
+  display: block;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.row input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.message {
+  min-height: 1.5em;
+  margin: 8px 0 0;
+}
+
+.totals {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  margin: 16px 0 0;
+}
+
+.totals dd {
+  margin: 0;
+  text-align: right;
+}
+
+.totals .total {
+  font-weight: 700;
+  font-size: 1.1em;
+}
+
+footer {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
