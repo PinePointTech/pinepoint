@@ -10,6 +10,8 @@ export const FREE_SHIPPING_FROM_CENTS = 2000;
 
 // Percent off the subtotal, per code.
 const PERCENT_COUPONS: Record<string, number> = { SAVE10: 10 };
+// Codes that make shipping free.
+const SHIPPING_COUPONS = new Set(["FREESHIP"]);
 
 export function addItem(cart: Cart, productId: string): Cart {
   const line = cart.lines.find((l) => l.productId === productId);
@@ -30,11 +32,8 @@ export function applyCoupon(
   input: string,
 ): { cart: Cart; message: string } {
   const code = input.trim().toUpperCase();
-  if (!(code in PERCENT_COUPONS)) {
+  if (!(code in PERCENT_COUPONS) && !SHIPPING_COUPONS.has(code)) {
     return { cart, message: "Coupon not valid." };
-  }
-  if (cart.coupons.includes(code)) {
-    return { cart, message: "Coupon already applied." };
   }
   return {
     cart: { ...cart, coupons: [...cart.coupons, code] },
@@ -64,8 +63,11 @@ export function totals(cart: Cart): Totals {
     }
   }
 
+  const freeShipping = cart.coupons.some((code) => SHIPPING_COUPONS.has(code));
   const shippingCents =
-    subtotalCents === 0 || subtotalCents >= FREE_SHIPPING_FROM_CENTS
+    subtotalCents === 0 ||
+    subtotalCents >= FREE_SHIPPING_FROM_CENTS ||
+    freeShipping
       ? 0
       : SHIPPING_CENTS;
 
