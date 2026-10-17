@@ -33,6 +33,7 @@ export interface RunRow {
   started_at: string | null;
   finished_at: string | null;
   next_start_at: string | null;
+  qa_md: string | null;
 }
 
 export interface MissionRow {
