@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PinePoint demo store",
+  title: "Linen and Oat",
+  description: "PinePoint demo store.",
 };
 
 export default function RootLayout({
@@ -9,7 +11,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <footer>PinePoint demo store. Static data. No real orders or payments.</footer>
+      </body>
     </html>
   );
 }
