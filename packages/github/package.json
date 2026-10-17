@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --env-file-if-exists=../../.env.local --import tsx --test \"src/**/*.test.ts\"",
+    "test:intake": "node --env-file-if-exists=../../.env.local --import tsx scripts/intake.ts",
     "test:review": "node --env-file-if-exists=../../.env.local --import tsx scripts/review.ts"
   },
   "devDependencies": {
