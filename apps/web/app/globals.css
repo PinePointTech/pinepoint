@@ -1,13 +1,91 @@
 @import "tailwindcss";
 
-/* Placeholder tokens. The style pass (VI-19) replaces them. */
+/* `dark:` classes follow the "dark" class on <html>, not the media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens. Light is the default; .dark overrides them. */
+:root {
+  --pp-bg: #faf6ee;
+  --pp-surface: #fffdf8;
+  --pp-surface-2: #f2ede1;
+  --pp-fg: #1d2420;
+  --pp-muted: #5b6660;
+  --pp-border: #e4ddcd;
+  --pp-accent: #2f7a52;
+  --pp-accent-hover: #26663f;
+  --pp-accent-fg: #ffffff;
+  --pp-accent-soft: #e3efe6;
+  --pp-danger: #b4452f;
+  --pp-danger-soft: #f7e3dc;
+  --pp-ring: #2f7a52;
+  color-scheme: light;
+}
+
+.dark {
+  --pp-bg: #121815;
+  --pp-surface: #19201c;
+  --pp-surface-2: #212a25;
+  --pp-fg: #e7ece8;
+  --pp-muted: #9ba8a0;
+  --pp-border: #2d3832;
+  --pp-accent: #63b98b;
+  --pp-accent-hover: #7cc89f;
+  --pp-accent-fg: #0c1a12;
+  --pp-accent-soft: #1c3326;
+  --pp-danger: #e58a72;
+  --pp-danger-soft: #3a211b;
+  --pp-ring: #63b98b;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--pp-bg);
+  --color-surface: var(--pp-surface);
+  --color-surface-2: var(--pp-surface-2);
+  --color-fg: var(--pp-fg);
+  --color-muted: var(--pp-muted);
+  --color-border: var(--pp-border);
+  --color-accent: var(--pp-accent);
+  --color-accent-hover: var(--pp-accent-hover);
+  --color-accent-fg: var(--pp-accent-fg);
+  --color-accent-soft: var(--pp-accent-soft);
+  --color-danger: var(--pp-danger);
+  --color-danger-soft: var(--pp-danger-soft);
+  --color-ring: var(--pp-ring);
+  --font-sans: var(--font-rounded), ui-rounded, system-ui, sans-serif;
+}
+
+/* Fixed pine scale. pine-50, pine-600 and pine-900 are shared names. */
 @theme {
   --color-pine-50: #f3f8f4;
+  --color-pine-100: #e3efe6;
+  --color-pine-200: #c5dfcd;
+  --color-pine-300: #9cc8aa;
+  --color-pine-400: #63b98b;
+  --color-pine-500: #3f9165;
   --color-pine-600: #2f7a52;
+  --color-pine-700: #26663f;
+  --color-pine-800: #1e5034;
   --color-pine-900: #173d2a;
+  --color-pine-950: #0c1f15;
 }
 
 body {
-  background: #faf8f3;
-  color: #1c1f1d;
+  background: var(--pp-bg);
+  color: var(--pp-fg);
+}
+
+::selection {
+  background: var(--pp-accent);
+  color: var(--pp-accent-fg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--pp-ring);
+  outline-offset: 3px;
+}
+
+html {
+  scrollbar-color: var(--pp-border) var(--pp-bg);
+  caret-color: var(--pp-accent);
 }
