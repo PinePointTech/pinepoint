@@ -17,6 +17,9 @@ next-env.d.ts
 # vercel
 .vercel/
 
+# spike output (screenshots, result.json)
+.spike-out/
+
 # misc
 .DS_Store
 *.log

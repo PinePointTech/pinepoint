@@ -9,10 +9,15 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "spike": "tsx scripts/spike.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@pinesandbox/computer": "0.3.3"
   }
 }
