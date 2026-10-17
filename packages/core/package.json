@@ -9,10 +9,16 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --env-file-if-exists=../../.env.local --import tsx --test \"src/**/*.test.ts\"",
+    "db:migrate": "node --env-file-if-exists=../../.env.local --import tsx scripts/migrate.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0"
   }
 }

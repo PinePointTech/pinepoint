@@ -35,6 +35,17 @@ On Vercel the values live in the project settings. Blob and Neon come from the S
 
 `GET /api/health` shows which variables a deployment has, as `true` or `false`. It never shows a value.
 
+## Database
+
+Neon Postgres. The schema lives in `db/*.sql` (plan section 4.3). `packages/core` owns the access code:
+
+```sh
+pnpm --filter @pinepoint/core db:migrate   # apply db/*.sql in order; safe to run twice
+pnpm --filter core test                    # crypto round trip and the handle store round trip
+```
+
+Both read `DATABASE_URL` and `ENCRYPTION_KEY` from `.env.local` at the repo root. `sql()` from `@pinepoint/core` is the query function. `saveHandle` and `loadHandle` keep Pine handles in `missions.pine_enc`, encrypted with AES-256-GCM. Local and Vercel share one database, so they must share one `ENCRYPTION_KEY`.
+
 ## Deploy
 
 Vercel builds every pushed branch as a preview and `main` as production. The project settings are Root Directory `apps/web` and framework Next.js. `engines` in `package.json` pins Node.js 22.x.
