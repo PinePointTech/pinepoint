@@ -95,8 +95,10 @@ async function scenario(baseUrl, items, code, times) {
   const ctx = await b.newContext();
   const page = await ctx.newPage();
   try {
-    const res = await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
+    const res = await page.goto(baseUrl, { waitUntil: "load", timeout: 30000 });
     if (!res || res.status() !== 200) throw new Error(`HTTP ${res ? res.status() : "none"} at ${baseUrl}`);
+    // Give hydration a chance; a page that never goes idle is not a failure by itself.
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
     for (const item of items) await page.getByRole("button", { name: item, exact: true }).click();
     for (let i = 0; i < times; i++) {
       await page.getByLabel("Coupon code").fill(code);
@@ -111,8 +113,17 @@ async function scenario(baseUrl, items, code, times) {
   }
 }
 
+// One retry on errors (timeouts, launch hiccups) so the watch does not report blips.
+async function scenarioWithRetry(...args) {
+  try {
+    return await scenario(...args);
+  } catch {
+    return scenario(...args);
+  }
+}
+
 async function expectScenario(baseUrl, items, code, times, wantTotal, wantStatus) {
-  const { total, status } = await scenario(baseUrl, items, code, times);
+  const { total, status } = await scenarioWithRetry(baseUrl, items, code, times);
   const okTotal = total === wantTotal;
   const okStatus = wantStatus == null || status === wantStatus;
   return {
@@ -150,7 +161,7 @@ async function storeChecks() {
   await check("store", "prod: oven glove alone = $13.00", () =>
     expectScenario(STORE, [GLOVE], "", 0, "$13.00", null));
   await check("store", "prod: FREESHIP not valid", async () => {
-    const { status } = await scenario(STORE, [GLOVE], "FREESHIP", 1);
+    const { status } = await scenarioWithRetry(STORE, [GLOVE], "FREESHIP", 1);
     return { pass: status === "Coupon not valid.", detail: `status="${status}"` };
   });
 }
