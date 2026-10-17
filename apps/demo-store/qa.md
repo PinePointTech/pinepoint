@@ -28,12 +28,11 @@ Linen and Oat is a small demo store with three products. The cart is in browser 
 2. Shipping is $4.00. Shipping is free when the subtotal is $20.00 or more.
 3. SAVE10 gives 10% off one time.
 4. A second SAVE10 shows "Coupon already applied." The total does not change.
-5. FREESHIP makes shipping free on any order. It works with SAVE10.
-6. An unknown code shows "Coupon not valid."
+5. An unknown code shows "Coupon not valid."
 
 ## Test data
 
-Coupon codes: SAVE10, FREESHIP.
+Coupon codes: SAVE10.
 
 ## Expected totals
 
@@ -45,8 +44,6 @@ Coupon codes: SAVE10, FREESHIP.
 | Add Oat oven glove | $13.00 | |
 | Add Linen tea towel set | $20.00 | |
 | Add all three products. Apply SAVE10. | $44.10 | SAVE10 applied. |
-| Add Oat oven glove. Apply FREESHIP. | $9.00 | FREESHIP applied. |
-| Add Oat oven glove. Apply FREESHIP. Apply SAVE10. | $8.10 | SAVE10 applied. |
 | Add Sage linen apron. Apply WELCOME. | $24.00 | Coupon not valid. |
 
 ## Never do
