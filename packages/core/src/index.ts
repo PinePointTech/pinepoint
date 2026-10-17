@@ -1,3 +1,5 @@
 // @pinepoint/core: Shared types, zod schemas, database access and encryption.
-// Placeholder from the VI-5 scaffold. The owning issue adds the code.
-export {};
+
+export { sql, databaseUrl, type Sql } from "./db";
+export { encrypt, decrypt, encryptionKey } from "./crypto";
+export { saveHandle, loadHandle, type PineHandle } from "./handles";
