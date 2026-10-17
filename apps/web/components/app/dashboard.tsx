@@ -11,10 +11,29 @@ import {
   type StatusResponse,
 } from "@/lib/app-types";
 import { MissionTile } from "./mission-tile";
+import { SessionPanel, type FindingView } from "@/components/session-panel";
+import type { Finding } from "@/lib/app-types";
 import { SessionPanelSlot } from "./session-panel-slot";
 import { findingFor } from "./tile-state";
 
 const POLL_MS = 3000;
+
+// The session panel takes the finding in its own shape.
+function toFindingView(f: Finding | undefined): FindingView | null {
+  if (!f || !f.level) return null;
+  return {
+    id: f.id,
+    level: f.level,
+    title: f.title ?? "Finding",
+    steps: f.steps ?? [],
+    expected: f.expected ?? "",
+    saw: f.saw ?? "",
+    production_saw: f.production_saw,
+    screenshot_url: f.screenshot_url,
+    decision: f.decision,
+    decided_at: f.decided_at,
+  };
+}
 
 const RUN_STATUS_LABEL: Record<Run["status"], string> = {
   planning: "Planning",
@@ -139,6 +158,8 @@ export function Dashboard() {
   }
 
   const missions = status?.missions ?? [];
+  const panelMission = missions.find((m) => m.id === panelMissionId);
+  const panelFinding = panelMission ? findingFor(panelMission, findings) : undefined;
   const ended = missions.filter((m) => m.finished_at !== null).length;
 
   return (
@@ -257,15 +278,25 @@ export function Dashboard() {
               </section>
             )}
 
-            {panelOpen && (
-              <SessionPanelSlot
-                runId={status.run.id}
-                missionId={panelMissionId}
-                findingId={openFinding?.id ?? null}
-                onClose={closePanel}
-                status={status}
-              />
-            )}
+            {panelOpen &&
+              (panelMissionId ? (
+                <SessionPanel
+                  key={panelMissionId}
+                  runId={status.run.id}
+                  missionId={panelMissionId}
+                  finding={toFindingView(openFinding ?? panelFinding)}
+                  onClose={closePanel}
+                  fake={fake}
+                />
+              ) : (
+                <SessionPanelSlot
+                  runId={status.run.id}
+                  missionId={panelMissionId}
+                  findingId={openFinding?.id ?? null}
+                  onClose={closePanel}
+                  status={status}
+                />
+              ))}
 
             {missions.length > 0 && (
               <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">

@@ -19,7 +19,7 @@ const OLD_RUN_IDS = [
 ];
 
 const PR_URL = "https://github.com/vihuynh72/pinepoint/pull/10";
-const PREVIEW_URL = "https://pinepoint-shop-git-feat-free-shipping.vercel.app";
+const PREVIEW_URL = "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app";
 
 type Plan = {
   lens: string;
@@ -29,16 +29,16 @@ type Plan = {
 };
 
 const PLANS: Plan[] = [
-  { lens: "Happy path", persona: "First-time buyer", goal: "Add one mug to the cart and check out.", end: "passed" },
-  { lens: "Happy path", persona: "Returning buyer", goal: "Buy two items and read the free shipping line.", end: "passed" },
+  { lens: "Flow", persona: "First-time buyer", goal: "Add the Sage linen apron to the cart and place the order.", end: "passed" },
+  { lens: "Flow", persona: "Returning buyer", goal: "Buy all three products and read the total.", end: "passed" },
   { lens: "Abuse", persona: "Coupon abuser", goal: "Apply SAVE10 two times and read the total.", end: "failed" },
-  { lens: "Edge case", persona: "Bulk buyer", goal: "Set the quantity to 99 and read the total.", end: "passed" },
-  { lens: "Edge case", persona: "Threshold tester", goal: "Make the subtotal exactly $50.00 and read the shipping cost.", end: "failed" },
-  { lens: "Accessibility", persona: "Keyboard user", goal: "Check out with the keyboard only.", end: "passed" },
-  { lens: "Mobile", persona: "Phone shopper", goal: "Check out on a narrow screen.", end: "passed" },
-  { lens: "Regression", persona: "Cart editor", goal: "Remove an item and read the new total.", end: "passed" },
-  { lens: "Abuse", persona: "Negative quantity tester", goal: "Type -1 in the quantity field and check out.", end: "passed" },
-  { lens: "Happy path", persona: "Gift buyer", goal: "Add a gift note and check out.", end: "passed" },
+  { lens: "Abuse", persona: "Code guesser", goal: "Apply the code WELCOME and read the message.", end: "passed" },
+  { lens: "UI", persona: "Careful reader", goal: "Apply FREESHIP to the Oat oven glove and read the shipping line.", end: "failed" },
+  { lens: "UI", persona: "Phone shopper", goal: "Use the store on a narrow screen and place an order.", end: "passed" },
+  { lens: "Access", persona: "Keyboard user", goal: "Add a product and apply SAVE10 with the keyboard only.", end: "passed" },
+  { lens: "Access", persona: "Screen reader user", goal: "Apply SAVE10 and read the coupon message.", end: "passed" },
+  { lens: "Safety", persona: "Cautious buyer", goal: "Place an order and check that the store asks for no payment data.", end: "passed" },
+  { lens: "Flow", persona: "Cart editor", goal: "Remove the Oat oven glove and read the new total.", end: "passed" },
 ];
 
 const BUG_INDEX = 2;
@@ -90,7 +90,12 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
       url: PREVIEW_URL,
       status,
       result: null,
-      screenshot_url: null,
+      screenshot_url:
+        t >= endAt(i) && i === BUG_INDEX
+          ? "/demo/coupon-bug.png"
+          : t >= startAt(i)
+            ? "/demo/store-home.png"
+            : null,
       usage: null,
       started_at: t >= startAt(i) ? iso(baseMs, startAt(i)) : null,
       finished_at: t >= endAt(i) ? iso(baseMs, endAt(i)) : null,
@@ -115,18 +120,19 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
       id: FAKE_BUG_FINDING_ID,
       mission_ids: [missionId(BUG_INDEX)],
       level: "bug",
-      title: "SAVE10 applies two times",
+      title: "Coupon applies two times",
       steps: [
-        "Add the $24.00 mug to the cart.",
-        "Open the cart.",
-        "Type SAVE10 in the coupon field and click Apply.",
-        "Type SAVE10 again and click Apply.",
-        "Read the total.",
+        "Open the store.",
+        "Add the Sage linen apron to the cart.",
+        "Enter SAVE10. Click Apply.",
+        "Enter SAVE10 again. Click Apply.",
       ],
       expected: "$21.60",
       saw: "$19.44",
-      path: "apps/shop/lib/cart.ts",
-      line: 42,
+      production_saw: "$21.60",
+      screenshot_url: "/demo/coupon-bug.png",
+      path: "apps/demo-store/lib/cart.ts",
+      line: 38,
     });
   }
   if (t >= endAt(POSSIBLE_INDEX)) {
@@ -135,16 +141,17 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
       id: FAKE_POSSIBLE_FINDING_ID,
       mission_ids: [missionId(POSSIBLE_INDEX)],
       level: "possible",
-      title: "Shipping at exactly $50.00 is not clear",
+      title: "The shipping line does not name FREESHIP",
       steps: [
-        "Add items until the subtotal is $50.00.",
-        "Open the cart.",
-        "Read the shipping line.",
+        "Open the store.",
+        "Add the Oat oven glove to the cart.",
+        "Enter FREESHIP. Click Apply.",
+        "Read the Shipping line.",
       ],
-      expected: "Free shipping",
-      saw: "Shipping: $4.99",
-      path: "apps/shop/lib/shipping.ts",
-      line: 7,
+      expected: "Shipping: Free (FREESHIP)",
+      saw: "Shipping: Free",
+      path: "apps/demo-store/lib/cart.ts",
+      line: 66,
     });
   }
 
@@ -160,7 +167,7 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
     owner: "vihuynh72",
     repo: "pinepoint",
     pr_number: 10,
-    head_sha: "3f2c9a1",
+    head_sha: "efb48a1",
     author: "vihuynh72",
     preview_url: PREVIEW_URL,
     production_url: null,
