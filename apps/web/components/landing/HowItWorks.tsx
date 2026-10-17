@@ -52,10 +52,10 @@ export function HowItWorks() {
       <ol className="relative mt-10 grid gap-8 md:grid-cols-5 md:gap-6">
         <span
           aria-hidden
-          className="absolute left-5 top-5 bottom-5 w-px bg-border md:left-5 md:right-5 md:top-5 md:bottom-auto md:h-px md:w-auto"
+          className="absolute left-5 top-5 bottom-5 w-px bg-border md:left-5 md:right-[15%] md:top-5 md:bottom-auto md:h-px md:w-auto"
         />
         {steps.map(({ name, icon: Icon, text }) => (
-          <li key={name} className="relative flex gap-4 md:flex-col md:gap-4">
+          <li key={name} className="pp-reveal relative flex gap-4 md:flex-col md:gap-4">
             <span className="relative z-10 inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-border bg-bg text-accent">
               <Icon className="size-5" strokeWidth={1.75} aria-hidden />
             </span>

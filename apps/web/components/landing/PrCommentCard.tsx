@@ -35,6 +35,10 @@ export function PrCommentCard() {
               <span>Shipping</span>
               <span className="font-bold tabular-nums text-danger">$5.99</span>
             </div>
+            <div className="flex items-center justify-between px-3 pt-1 text-xs font-bold">
+              <span>Total</span>
+              <span className="tabular-nums">$55.99</span>
+            </div>
           </div>
           <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-fg/80 px-2 py-0.5 text-[11px] font-medium text-bg">
             <MonitorPause className="size-3" strokeWidth={2} aria-hidden />

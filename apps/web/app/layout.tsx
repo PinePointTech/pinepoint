@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { M_PLUS_Rounded_1c } from "next/font/google";
+import { MapPin } from "lucide-react";
 import Link from "next/link";
 import { ThemeScript } from "@/components/theme/ThemeScript";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
@@ -13,9 +14,10 @@ const rounded = M_PLUS_Rounded_1c({
 });
 
 export const metadata: Metadata = {
-  title: "PinePoint",
+  title: "PinePoint: every preview gets a QA team",
   description:
-    "Simulated users test each PR preview. PinePoint posts the bug, the steps and the paused browser on the PR.",
+    "You review the code. PinePoint uses the preview like a real user and shows you where it breaks.",
+  icons: { icon: "/icon.svg" },
 };
 
 export default function RootLayout({
@@ -30,11 +32,12 @@ export default function RootLayout({
         <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
           <Link
             href="/"
-            className="flex items-center gap-2 text-lg font-extrabold tracking-tight text-fg"
+            className="flex items-center gap-1.5 text-lg font-extrabold tracking-tight text-fg"
           >
-            <span
+            <MapPin
+              className="size-5 text-accent"
+              strokeWidth={2}
               aria-hidden
-              className="inline-block size-3 rounded-full bg-accent"
             />
             PinePoint
           </Link>

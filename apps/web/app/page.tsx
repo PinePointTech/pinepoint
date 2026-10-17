@@ -20,7 +20,7 @@ export default function Home() {
               href="/app"
               className="group inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 font-bold text-accent-fg shadow-[0_8px_20px_-10px_rgb(47_122_82/0.6)] transition-colors hover:bg-accent-hover"
             >
-              Open the app
+              Test a PR
               <ArrowRight
                 className="size-4 transition-transform group-hover:translate-x-0.5"
                 strokeWidth={2}
