@@ -219,6 +219,9 @@ const answers: Record<string, unknown> = {
   url,
   concurrencyLimit: null as number | null,
   lifecyclePolicy: null as unknown,
+  pauseEnabled: null as boolean | null,
+  pauseError: null as string | null,
+  idleTimeoutFallback: null as unknown,
   pausedCountsAgainstLimit: "not probed (pass --probe-limit)",
   failPngExists: null as boolean | null,
   failPngSource: null as string | null,
@@ -404,14 +407,52 @@ async function main() {
   // 6. Pause, read the limit while paused, resume.
   if (!skipPause) {
     const tPause = Date.now();
-    await computer.pause({ timeoutMs: 180_000 });
-    answers.pauseMs = Date.now() - tPause;
-    log("paused", { status: await computer.status(), ms: answers.pauseMs });
+    let paused = false;
+    try {
+      await computer.pause({ timeoutMs: 180_000 });
+      paused = true;
+      answers.pauseEnabled = true;
+      answers.pauseMs = Date.now() - tPause;
+      log("paused", { status: await computer.status(), ms: answers.pauseMs });
+    } catch (e) {
+      const err = redactErr(e);
+      answers.pauseEnabled = false;
+      answers.pauseError = err.message;
+      log("pause refused", err);
+    }
 
-    const pausedPolicy = await client.projectPolicy();
-    log("projectPolicy while paused", pausedPolicy);
+    if (!paused) {
+      // Fallback for the product: keep a failed Computer running with a long idle
+      // timeout. Work renews the idle window; reading status does not.
+      answers.pausedCountsAgainstLimit = "n/a: pause is not enabled; a kept Computer stays running and counts";
+      try {
+        const before = await computer.runtimeDetails();
+        log("runtimeDetails before setIdleTimeout", {
+          state: before.state,
+          lifetime: before.lifetime,
+          expiresAt: before.expiresAt,
+        });
+        const target = 3600;
+        const after = await computer.setIdleTimeout(target);
+        answers.idleTimeoutFallback = {
+          requestedSeconds: target,
+          appliedSeconds: after.lifetime?.idleTimeoutSeconds ?? null,
+          maxIdleTimeoutSeconds: after.lifetime?.maxIdleTimeoutSeconds ?? null,
+          maxRuntimeAgeSeconds: after.lifetime?.maxRuntimeAgeSeconds ?? null,
+          expiresAt: after.expiresAt ?? null,
+          lifetimePresent: Boolean(after.lifetime),
+        };
+        log("setIdleTimeout", answers.idleTimeoutFallback);
+      } catch (e) {
+        answers.idleTimeoutFallback = { error: redactErr(e) };
+        log("setIdleTimeout failed", redactErr(e));
+      }
+    }
 
-    if (probeLimit) {
+    const pausedPolicy = paused ? await client.projectPolicy() : null;
+    if (pausedPolicy) log("projectPolicy while paused", pausedPolicy);
+
+    if (paused && pausedPolicy && probeLimit) {
       // Create Computers until the limit refuses. If the count that succeeds equals the
       // limit, a paused Computer does not count. If it is limit - 1, it does.
       const limit = pausedPolicy.maxConcurrentComputers;
@@ -450,12 +491,14 @@ async function main() {
       }
     }
 
-    const tResume = Date.now();
-    await computer.resume({ timeoutMs: 180_000 });
-    answers.resumeMs = Date.now() - tResume;
-    log("resumed", { status: await computer.status(), ms: answers.resumeMs });
+    if (paused) {
+      const tResume = Date.now();
+      await computer.resume({ timeoutMs: 180_000 });
+      answers.resumeMs = Date.now() - tResume;
+      log("resumed", { status: await computer.status(), ms: answers.resumeMs });
+    }
 
-    // Prove the session survives pause/resume by adopting it from its saved token.
+    // Prove the session can be re-adopted from its saved token in a new handle.
     const adopted = computer.adoptSession("mission", sessionToken);
     try {
       const after = await adopted.listArtifacts({ turnId: turn.turnId });
