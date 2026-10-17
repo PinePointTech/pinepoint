@@ -10,6 +10,10 @@
 //   --url <url>          The page to test. Default: https://example.com
 //   --expect <text>      Literal text the agent must see on the page. Default: "Example Domain"
 //   --no-plant-fail      Do not add the check that must fail (used to prove fail.png exists)
+//   --goal <text>        Replace the default goal
+//   --check "Name=text"  Add an exact check (repeatable). Replaces the default checks and the planted one
+//   --persona / --lens   Override the persona and lens
+//   --allow-login        Let the agent use test credentials named in the goal
 //   --probe-limit        While paused, create Computers until the limit to learn if paused counts
 //   --skip-pause         Skip the pause and resume step
 //   --mission-ms <n>     Mission budget in ms. Default: 240000 (4 minutes, plan section 5 rule 7)
@@ -44,6 +48,8 @@ for (const candidate of [resolve(repoRoot, ".env.local"), resolve(repoRoot, ".en
   }
 }
 
+type Check = { name: string; expected: string };
+
 function flag(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
@@ -55,7 +61,21 @@ function opt(name: string, fallback: string): string {
 
 const url = opt("url", "https://example.com");
 const expectText = opt("expect", "Example Domain");
-const plantFail = !flag("no-plant-fail");
+const customGoal = opt("goal", "");
+const customPersona = opt("persona", "");
+const customLens = opt("lens", "");
+// --check "Name=expected text" (repeatable). Replaces the default checks.
+const customChecks: Check[] = [];
+for (let i = 0; i < process.argv.length; i++) {
+  if (process.argv[i] === "--check" && process.argv[i + 1]) {
+    const raw = process.argv[++i]!;
+    const eq = raw.indexOf("=");
+    if (eq > 0) customChecks.push({ name: raw.slice(0, eq).trim(), expected: raw.slice(eq + 1).trim() });
+  }
+}
+// --allow-login lets the agent use test credentials. Rule 1 still forbids real payment data.
+const allowLogin = flag("allow-login");
+const plantFail = !flag("no-plant-fail") && customChecks.length === 0;
 const probeLimit = flag("probe-limit");
 const skipPause = flag("skip-pause");
 const missionBudgetMs = Number(opt("mission-ms", "240000"));
@@ -92,12 +112,11 @@ function redactErr(e: unknown): Record<string, unknown> {
 
 // ---------- mission (plan section 6) ----------
 
-type Check = { name: string; expected: string };
-
-const persona = "First-time visitor";
-const lens = "Flow";
-const goal = `Open the page and read the main heading. Check each item in the check list.`;
-const checks: Check[] = [{ name: "Main heading", expected: expectText }];
+const persona = customPersona || "First-time visitor";
+const lens = customLens || "Flow";
+const goal = customGoal || `Open the page and read the main heading. Check each item in the check list.`;
+const checks: Check[] =
+  customChecks.length > 0 ? customChecks : [{ name: "Main heading", expected: expectText }];
 if (plantFail) {
   checks.push({
     name: "Planted failing check",
@@ -118,11 +137,14 @@ function buildGoal(): string {
   const checkLines = checks
     .map((c, i) => `${i + 1}. ${c.name}: expected "${c.expected}"`)
     .join("\n");
+  const rule1 = allowLogin
+    ? "1. Use only the test credentials in the goal. Do not enter real payment data."
+    : "1. Do not sign in. Do not enter real payment data.";
   return `You are a simulated user. Persona: ${persona}. Lens: ${lens}.
 Open ${url}.
 Goal: ${goal}
 Rules:
-1. Do not sign in. Do not enter real payment data.
+${rule1}
 2. Stop after 12 actions.
 3. Check each item in the check list. Write what you see.
 4. When a check fails, save a screenshot of the screen as fail.png.
