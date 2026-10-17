@@ -56,7 +56,7 @@ pnpm --filter ai test:planner -- --pr https://github.com/vihuynh72/pinepoint/pul
 pnpm --filter ai test:planner -- --diff path/to/file.diff                      # any saved diff
 ```
 
-Until issue 07 reads the live diff, `--pr` loads `packages/ai/fixtures/<owner>-<repo>-pr-<number>.diff`. Both commands read `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
+`--pr` loads `packages/ai/fixtures/<owner>-<repo>-pr-<number>.diff` when a saved diff exists, else it reads the live PR from GitHub (`GITHUB_TOKEN` first, then the `gh` CLI) and takes `qa.md` and the changed files from the PR head. The SAVE10 check runs only for the planted PR in `eval/planted.json`. Both commands read `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
 
 ## Deploy
 
