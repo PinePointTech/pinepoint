@@ -13,7 +13,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
-        <footer>Linen and Oat is a PinePoint demo store. No real orders or payments.</footer>
+        <footer>Linen and Oat is a PinePoint demo store. All products are samples. No real orders or payments.</footer>
       </body>
     </html>
   );
