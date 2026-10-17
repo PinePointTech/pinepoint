@@ -32,12 +32,16 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function listRuns(opts: ApiOptions = {}): Promise<RunsResponse> {
-  if (opts.fake) return getFakeRuns();
+// `fake` tells the page that the data is sample data, so it never asks
+// Pine for a computer that does not exist.
+export type WithFake<T> = T & { fake: boolean };
+
+export async function listRuns(opts: ApiOptions = {}): Promise<WithFake<RunsResponse>> {
+  if (opts.fake) return { ...getFakeRuns(), fake: true };
   try {
-    return await getJson<RunsResponse>("/api/runs");
+    return { ...(await getJson<RunsResponse>("/api/runs")), fake: false };
   } catch (err) {
-    if (err instanceof NotFound) return getFakeRuns();
+    if (err instanceof NotFound) return { ...getFakeRuns(), fake: true };
     throw err;
   }
 }
@@ -67,16 +71,16 @@ export async function createRun(
 export async function getRunStatus(
   runId: string,
   opts: ApiOptions & { complete?: boolean } = {},
-): Promise<StatusResponse> {
-  if (opts.fake) return getFakeStatus(runId, { complete: opts.complete });
+): Promise<WithFake<StatusResponse>> {
+  const fake = () => ({ ...getFakeStatus(runId, { complete: opts.complete }), fake: true });
+  if (opts.fake) return fake();
   try {
-    return await getJson<StatusResponse>(
+    const body = await getJson<StatusResponse>(
       `/api/runs/${encodeURIComponent(runId)}/status`,
     );
+    return { ...body, fake: false };
   } catch (err) {
-    if (err instanceof NotFound) {
-      return getFakeStatus(runId, { complete: opts.complete });
-    }
+    if (err instanceof NotFound) return fake();
     throw err;
   }
 }
