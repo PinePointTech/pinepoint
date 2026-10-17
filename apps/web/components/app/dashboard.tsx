@@ -1,21 +1,38 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { History, Play } from "lucide-react";
-import { createRun, formatCost, getRunStatus, listRuns } from "@/lib/app-api";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  GitPullRequest,
+  History,
+  MessageSquareText,
+  Play,
+} from "lucide-react";
+import { createRun, getRunStatus, listRuns, type WithFake } from "@/lib/app-api";
 import {
   TERMINAL_RUN_STATUSES,
+  type Finding,
   type Run,
   type StatusResponse,
 } from "@/lib/app-types";
-import { MissionTile } from "./mission-tile";
 import { SessionPanel, type FindingView } from "@/components/session-panel";
-import type { Finding } from "@/lib/app-types";
-import { SessionPanelSlot } from "./session-panel-slot";
-import { findingFor } from "./tile-state";
+import { CostCard } from "./cost-card";
+import { MissionGroups } from "./mission-groups";
+import { findingFor, tileState } from "./tile-state";
 
 const POLL_MS = 3000;
+
+const RUN_STATUS_LABEL: Record<Run["status"], string> = {
+  planning: "Planning",
+  running: "Running",
+  reporting: "Reporting",
+  done: "Done",
+  failed: "Failed",
+  no_preview: "No preview",
+};
 
 // The session panel takes the finding in its own shape.
 function toFindingView(f: Finding | undefined): FindingView | null {
@@ -34,31 +51,65 @@ function toFindingView(f: Finding | undefined): FindingView | null {
   };
 }
 
-const RUN_STATUS_LABEL: Record<Run["status"], string> = {
-  planning: "Planning",
-  running: "Running",
-  reporting: "Reporting",
-  done: "Done",
-  failed: "Failed",
-  no_preview: "No preview",
-};
+function minutesBetween(start: string | null, end: string | null): string | null {
+  if (!start) return null;
+  const ms = (end ? Date.parse(end) : Date.now()) - Date.parse(start);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  return `${(ms / 60000).toFixed(1)} min`;
+}
+
+function Chip({ label, value, tone }: { label: string; value: string | number; tone: string }) {
+  return (
+    <li className={`flex items-baseline gap-2 rounded-2xl border px-4 py-2 ${tone}`}>
+      <span className="text-lg font-bold tabular-nums">{value}</span>
+      <span className="text-sm">{label}</span>
+    </li>
+  );
+}
+
+function QuickLink({
+  href,
+  icon: Icon,
+  children,
+}: {
+  href: string;
+  icon: typeof ExternalLink;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-sm text-fg transition-colors hover:border-accent hover:text-accent"
+    >
+      <Icon className="size-4" strokeWidth={1.75} aria-hidden />
+      {children}
+    </a>
+  );
+}
 
 export function Dashboard() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const fake = params.get("fake") === "1";
+  const fakeParam = params.get("fake") === "1";
   const runId = params.get("run");
   const findingParam = params.get("finding");
 
   const [runs, setRuns] = useState<Run[]>([]);
-  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [status, setStatus] = useState<WithFake<StatusResponse> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prUrl, setPrUrl] = useState("");
   const [starting, setStarting] = useState(false);
   const [missionId, setMissionId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [, setNow] = useState(0);
   // A shared ?finding= link opens a finished run. Fake data skips the wait.
   const [complete] = useState(() => findingParam !== null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  const usingFake = fakeParam || status?.fake === true;
 
   const setQuery = useCallback(
     (next: Record<string, string | null>) => {
@@ -74,10 +125,10 @@ export function Dashboard() {
   );
 
   const refreshRuns = useCallback(() => {
-    listRuns({ fake })
+    listRuns({ fake: fakeParam })
       .then((r) => setRuns(r.runs.slice(0, 10)))
       .catch((e: Error) => setError(`Cannot load runs: ${e.message}`));
-  }, [fake]);
+  }, [fakeParam]);
 
   useEffect(refreshRuns, [refreshRuns]);
 
@@ -91,7 +142,7 @@ export function Dashboard() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
       try {
-        const s = await getRunStatus(runId, { fake, complete });
+        const s = await getRunStatus(runId, { fake: fakeParam, complete });
         if (stop) return;
         setStatus(s);
         setError(null);
@@ -110,11 +161,17 @@ export function Dashboard() {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [runId, fake, complete, refreshRuns]);
+  }, [runId, fakeParam, complete, refreshRuns]);
 
-  async function onRun(e: React.FormEvent) {
-    e.preventDefault();
-    const url = prUrl.trim();
+  const runEnded = status ? TERMINAL_RUN_STATUSES.includes(status.run.status) : true;
+  // Keep the "minutes" chip moving while a run is going.
+  useEffect(() => {
+    if (runEnded) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [runEnded]);
+
+  async function startRun(url: string) {
     if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(url)) {
       setError("Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.");
       return;
@@ -122,10 +179,10 @@ export function Dashboard() {
     setStarting(true);
     setError(null);
     try {
-      const res = await createRun(url, { fake });
+      const res = await createRun(url, { fake: fakeParam });
       setStatus(null);
       setMissionId(null);
-      setQuery({ run: res.runId, finding: null, fake: fake || res.fake ? "1" : null });
+      setQuery({ run: res.runId, finding: null, fake: fakeParam || res.fake ? "1" : null });
       refreshRuns();
     } catch (err) {
       setError(`Cannot start the run: ${(err as Error).message}`);
@@ -134,61 +191,97 @@ export function Dashboard() {
     }
   }
 
+  function onRun(e: React.FormEvent) {
+    e.preventDefault();
+    startRun(prUrl.trim());
+  }
+
   function openRun(id: string) {
     setMissionId(null);
     setQuery({ run: id, finding: null });
   }
 
   const findings = status?.findings ?? [];
+  const missions = status?.missions ?? [];
+  const previewMissions = missions.filter((m) => m.kind === "preview");
   const openFinding = findings.find((f) => f.id === findingParam);
   const panelMissionId = missionId ?? openFinding?.mission_ids?.[0] ?? null;
-  const panelOpen = status !== null && (panelMissionId !== null || openFinding !== undefined);
+  const panelMission = missions.find((m) => m.id === panelMissionId);
+  const panelFinding = openFinding ?? (panelMission ? findingFor(panelMission, findings) : undefined);
+  const panelOpen = status !== null && panelMissionId !== null;
 
   function openMission(id: string) {
-    const mission = status?.missions.find((m) => m.id === id);
+    const mission = missions.find((m) => m.id === id);
     const f = mission ? findingFor(mission, findings) : undefined;
     setMissionId(id);
     setQuery({ finding: f?.id ?? null });
   }
 
-  function closePanel() {
+  const closePanel = useCallback(() => {
     setMissionId(null);
     setQuery({ finding: null });
+  }, [setQuery]);
+
+  // The panel is a native modal dialog: it traps focus, closes on Esc and
+  // keeps the cards visible behind a light backdrop.
+  useEffect(() => {
+    const d = dialogRef.current;
+    if (!d) return;
+    if (panelOpen && !d.open) d.showModal();
+    if (!panelOpen && d.open) d.close();
+  }, [panelOpen]);
+
+  async function copyRunLink() {
+    if (!status) return;
+    const link = `${window.location.origin}/app?run=${status.run.id}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError(`Copy did not work. The link is ${link}`);
+    }
   }
 
-  const missions = status?.missions ?? [];
-  const panelMission = missions.find((m) => m.id === panelMissionId);
-  const panelFinding = panelMission ? findingFor(panelMission, findings) : undefined;
-  const ended = missions.filter((m) => m.finished_at !== null).length;
+  const states = previewMissions.map((m) => tileState(m, findingFor(m, findings)));
+  const ended = previewMissions.filter((m) => m.finished_at !== null).length;
+  const total = previewMissions.length;
+  const counts = {
+    bugs: findings.filter((f) => f.level === "bug").length,
+    possible: findings.filter((f) => f.level === "possible").length,
+    passed: states.filter((s) => s === "passed").length,
+    blocked: states.filter((s) => s === "blocked").length,
+  };
+  const minutes = status ? minutesBetween(status.run.started_at, status.run.finished_at) : null;
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 md:flex-row md:px-6">
-      <aside className="md:w-64 md:shrink-0">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
-          <History className="h-4 w-4" />
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 pb-16 sm:px-6 md:flex-row">
+      <aside className="md:w-60 md:shrink-0">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-muted">
+          <History className="size-4" strokeWidth={1.75} aria-hidden />
           Last runs
         </h2>
         {runs.length === 0 ? (
-          <p className="mt-2 text-sm text-stone-500 dark:text-stone-400">No runs yet.</p>
+          <p className="mt-3 text-sm text-muted">No runs yet.</p>
         ) : (
-          <ul className="mt-2 flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible">
+          <ul className="mt-3 flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible">
             {runs.map((r) => (
               <li key={r.id} className="shrink-0">
                 <button
                   type="button"
                   onClick={() => openRun(r.id)}
-                  className={`w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800 ${
-                    r.id === runId
-                      ? "bg-pine-50 font-medium text-pine-900 dark:bg-pine-900/40 dark:text-pine-50"
-                      : ""
+                  className={`w-full rounded-2xl px-4 py-2.5 text-left text-sm transition-colors hover:bg-surface ${
+                    r.id === runId ? "bg-surface font-semibold ring-1 ring-border" : ""
                   }`}
                 >
                   <span className="block">
                     {r.repo} #{r.pr_number}
                   </span>
-                  <span className="block text-xs text-stone-500 dark:text-stone-400">
+                  <span className="block text-xs text-muted">
                     {RUN_STATUS_LABEL[r.status] ?? r.status}
-                    {r.started_at ? ` / ${new Date(r.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                    {r.started_at
+                      ? ` / ${new Date(r.started_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                      : ""}
                   </span>
                 </button>
               </li>
@@ -197,8 +290,8 @@ export function Dashboard() {
         )}
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col gap-6">
-        <form onSubmit={onRun} className="flex flex-col gap-2 sm:flex-row">
+      <main className="flex min-w-0 flex-1 flex-col gap-8">
+        <form onSubmit={onRun} className="flex flex-col gap-3 sm:flex-row">
           <label htmlFor="pr-url" className="sr-only">
             PR URL
           </label>
@@ -208,112 +301,182 @@ export function Dashboard() {
             value={prUrl}
             onChange={(e) => setPrUrl(e.target.value)}
             placeholder="https://github.com/owner/repo/pull/1"
-            className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-pine-600 focus:ring-2 focus:ring-pine-600/30 dark:border-stone-700 dark:bg-stone-900"
+            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30"
           />
           <button
             type="submit"
             disabled={starting}
-            className="flex items-center justify-center gap-1 rounded-lg bg-pine-600 px-4 py-2 text-sm font-semibold text-white hover:bg-pine-900 disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-60"
           >
-            <Play className="h-4 w-4" />
+            <Play className="size-4" strokeWidth={2} aria-hidden />
             {starting ? "Starting" : "Run"}
           </button>
         </form>
 
         {error && (
-          <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">
+          <p role="alert" className="rounded-2xl bg-danger-soft px-4 py-3 text-sm text-danger">
             {error}
           </p>
         )}
 
         {!runId && (
-          <p className="text-sm text-stone-600 dark:text-stone-300">
-            Type a PR URL and click Run, or open a run from the list.
-          </p>
+          <section aria-labelledby="how-to" className="max-w-xl">
+            <h1 id="how-to" className="text-2xl font-extrabold tracking-tight">
+              Test a pull request
+            </h1>
+            <ol className="mt-4 space-y-3 text-muted">
+              <li className="flex gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">1</span>
+                Paste the URL of a GitHub PR that has a Vercel preview.
+              </li>
+              <li className="flex gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">2</span>
+                Click Run. Ten simulated users test the preview.
+              </li>
+              <li className="flex gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">3</span>
+                Open the red card to see the bug, the steps and the screen.
+              </li>
+            </ol>
+          </section>
         )}
 
-        {runId && !status && !error && (
-          <p className="text-sm text-stone-600 dark:text-stone-300">Loading the run.</p>
-        )}
+        {runId && !status && !error && <p className="text-sm text-muted">Loading the run.</p>}
 
         {status && (
           <>
-            <section className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h1 className="text-xl font-semibold text-pine-900 dark:text-pine-50">
-                <a href={status.run.pr_url} target="_blank" rel="noreferrer" className="hover:underline">
+            <section className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <h1 className="text-2xl font-extrabold tracking-tight">
                   {status.run.owner}/{status.run.repo} #{status.run.pr_number}
-                </a>
-              </h1>
-              <span data-testid="run-status" className="text-sm text-stone-600 dark:text-stone-300">
-                {RUN_STATUS_LABEL[status.run.status] ?? status.run.status}
-                {missions.length > 0 ? ` / ${ended} of ${missions.length} missions end` : ""}
-              </span>
+                </h1>
+                {usingFake && (
+                  <span className="rounded-full bg-amber-100 px-3 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                    Demo data
+                  </span>
+                )}
+              </div>
+              {usingFake && (
+                <p className="-mt-2 text-sm text-muted">
+                  The run routes are not ready. This is sample data.
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <QuickLink href={status.run.pr_url} icon={GitPullRequest}>
+                  Open the PR
+                </QuickLink>
+                {status.run.preview_url && (
+                  <QuickLink href={status.run.preview_url} icon={ExternalLink}>
+                    Open the preview
+                  </QuickLink>
+                )}
+                {status.run.review_id ? (
+                  <QuickLink
+                    href={`${status.run.pr_url}#pullrequestreview-${status.run.review_id}`}
+                    icon={MessageSquareText}
+                  >
+                    Open the PR review
+                  </QuickLink>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1.5 text-sm text-muted"
+                    title="PinePoint posts the review when all missions end."
+                  >
+                    <MessageSquareText className="size-4" strokeWidth={1.75} aria-hidden />
+                    Review not posted yet
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={copyRunLink}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-sm text-fg transition-colors hover:border-accent hover:text-accent"
+                >
+                  {copied ? (
+                    <Check className="size-4" strokeWidth={2} aria-hidden />
+                  ) : (
+                    <Copy className="size-4" strokeWidth={1.75} aria-hidden />
+                  )}
+                  {copied ? "Copied" : "Copy the run link"}
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="font-semibold">{RUN_STATUS_LABEL[status.run.status] ?? status.run.status}</span>
+                  <span className="text-muted tabular-nums">
+                    {total > 0 ? `${ended} of ${total} missions done` : "Writing the missions"}
+                  </span>
+                </div>
+                <progress
+                  className="h-2.5 w-full appearance-none overflow-hidden rounded-full [&::-moz-progress-bar]:rounded-full [&::-moz-progress-bar]:bg-accent [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-surface-2 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-accent"
+                  max={Math.max(total, 1)}
+                  value={ended}
+                  aria-label="Missions done"
+                />
+              </div>
+
+              <ul className="flex flex-wrap gap-2" aria-label="Run summary">
+                <Chip label="Bugs" value={counts.bugs} tone="border-danger/40 bg-danger-soft text-danger" />
+                <Chip
+                  label="Possible issues"
+                  value={counts.possible}
+                  tone="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
+                />
+                <Chip label="Passed" value={counts.passed} tone="border-accent/30 bg-accent-soft text-accent" />
+                <Chip label="Blocked" value={counts.blocked} tone="border-border bg-surface text-muted" />
+                {minutes && (
+                  <Chip
+                    label={runEnded ? "from Run to the end" : "so far"}
+                    value={minutes}
+                    tone="border-border bg-surface text-muted"
+                  />
+                )}
+              </ul>
             </section>
 
             {status.run.status === "no_preview" && (
-              <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm dark:bg-stone-800">
+              <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm">
                 This PR has no preview URL. PinePoint cannot test it.
               </p>
             )}
 
-            {missions.length > 0 && (
-              <section>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
-                  Missions
-                </h2>
-                <ol className="mt-2 divide-y divide-stone-200 rounded-xl border border-stone-200 bg-white text-sm dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
-                  {missions.map((m, i) => (
-                    <li key={m.id} className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:gap-3">
-                      <span className="shrink-0 text-stone-400 sm:w-6">{i + 1}</span>
-                      <span className="shrink-0 font-medium sm:w-32">{m.lens}</span>
-                      <span className="shrink-0 text-stone-600 dark:text-stone-300 sm:w-48">{m.persona}</span>
-                      <span className="min-w-0">{m.goal}</span>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            )}
+            <MissionGroups
+              missions={missions}
+              findings={findings}
+              selectedId={panelMissionId}
+              onOpen={openMission}
+            />
 
-            {panelOpen &&
-              (panelMissionId ? (
-                <SessionPanel
-                  key={panelMissionId}
-                  runId={status.run.id}
-                  missionId={panelMissionId}
-                  finding={toFindingView(openFinding ?? panelFinding)}
-                  onClose={closePanel}
-                  fake={fake}
-                />
-              ) : (
-                <SessionPanelSlot
-                  runId={status.run.id}
-                  missionId={panelMissionId}
-                  findingId={openFinding?.id ?? null}
-                  onClose={closePanel}
-                  status={status}
-                />
-              ))}
-
-            {missions.length > 0 && (
-              <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                {missions.map((m) => (
-                  <MissionTile
-                    key={m.id}
-                    mission={m}
-                    finding={findingFor(m, findings)}
-                    selected={m.id === panelMissionId}
-                    onOpen={() => openMission(m.id)}
-                  />
-                ))}
-              </section>
-            )}
-
-            <p data-testid="run-cost" className="text-sm text-stone-600 dark:text-stone-300">
-              Cost of this run: {formatCost(status.run.cost_usd)}
-            </p>
+            <CostCard run={status.run} missions={missions} />
           </>
         )}
       </main>
+
+      <dialog
+        ref={dialogRef}
+        aria-label="Session"
+        onClose={() => {
+          if (panelOpen) closePanel();
+        }}
+        onClick={(e) => {
+          // A click on the backdrop lands on the dialog element itself.
+          if (e.target === e.currentTarget) closePanel();
+        }}
+        className="m-0 ml-auto h-dvh max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-bg p-4 text-fg shadow-2xl backdrop:bg-fg/15 sm:p-6 md:w-[58%] md:rounded-l-[20px] lg:w-[52%]"
+      >
+        {panelOpen && status && panelMissionId && (
+          <SessionPanel
+            key={panelMissionId}
+            runId={status.run.id}
+            missionId={panelMissionId}
+            finding={toFindingView(panelFinding)}
+            lastScreenshotUrl={panelMission?.screenshot_url ?? null}
+            onClose={closePanel}
+            fake={usingFake}
+          />
+        )}
+      </dialog>
     </div>
   );
 }

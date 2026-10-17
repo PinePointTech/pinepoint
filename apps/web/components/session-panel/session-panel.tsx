@@ -2,23 +2,33 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Check, Hand, Wrench, X } from "lucide-react";
-import { DesktopMessage } from "./live-desktop";
-import type { Decision, FindingView, SessionPanelProps } from "./types";
+import { Bot, Check, Hand, MonitorOff, Wrench, X } from "lucide-react";
+import type { Decision, DesktopStatus, FindingView, SessionPanelProps } from "./types";
 
 // The desktop SDK uses browser APIs. Load it only in the browser.
 const LiveDesktop = dynamic(() => import("./live-desktop"), {
   ssr: false,
-  loading: () => <DesktopMessage text="The desktop is starting." />,
+  loading: () => <SoftBox text="The desktop is starting." />,
 });
 
 const IDLE_MS = 15 * 60 * 1000;
 
 const LEVEL_TEXT: Record<FindingView["level"], string> = {
   bug: "Bug",
-  possible: "Possible bug",
+  possible: "Possible issue",
   old_bug: "Old bug",
 };
+
+// Soft pastel pills with a thin border, the same colors as the mission tiles.
+const LEVEL_PILL: Record<FindingView["level"], string> = {
+  bug: "border-danger/30 bg-danger-soft text-danger",
+  possible:
+    "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/40 dark:text-amber-200",
+  old_bug: "border-border bg-surface-2 text-muted",
+};
+
+const FOCUS =
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 function timePT(iso: string | null): string {
   const d = iso ? new Date(iso) : new Date();
@@ -48,7 +58,16 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function SessionPanel({ runId, missionId, finding, onClose, fake = false }: SessionPanelProps) {
+export function SessionPanel({
+  id,
+  runId,
+  missionId,
+  finding,
+  lastScreenshotUrl,
+  onClose,
+  fake = false,
+}: SessionPanelProps) {
+  const [desktop, setDesktop] = useState<DesktopStatus>("starting");
   const [control, setControl] = useState<"view" | "drive">("view");
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -63,6 +82,17 @@ export function SessionPanel({ runId, missionId, finding, onClose, fake = false 
     setDecidedAt(finding?.decided_at ?? null);
     setDecisionError(null);
   }, [finding?.id, finding?.decision, finding?.decided_at]);
+
+  // A new mission asks for its own desktop.
+  useEffect(() => {
+    setDesktop("starting");
+    setControl("view");
+    setControlError(null);
+  }, [missionId]);
+
+  // Sample data has no Pine computer. A failed or stopped desktop has no live view.
+  const live = !fake && desktop === "live";
+  const ended = fake || desktop === "ended";
 
   // Control returns to the agent after 15 minutes without input.
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,12 +116,20 @@ export function SessionPanel({ runId, missionId, finding, onClose, fake = false 
     if (control === "drive") armIdle();
   }, [control, armIdle]);
 
+  const onDesktopStatus = useCallback((status: "live" | "ended") => {
+    setDesktop(status);
+    if (status === "ended") {
+      // Nobody can drive a desktop that is gone.
+      setControl("view");
+      setControlError(null);
+    }
+  }, []);
+
   async function changeControl(action: "take" | "release") {
     setControlBusy(true);
     setControlError(null);
     try {
-      if (fake) await wait(300);
-      else await postJson(`/api/missions/${encodeURIComponent(missionId)}/control`, { action });
+      await postJson(`/api/missions/${encodeURIComponent(missionId)}/control`, { action });
       if (action === "take") {
         setControl("drive");
         armIdle();
@@ -137,21 +175,25 @@ export function SessionPanel({ runId, missionId, finding, onClose, fake = false 
   }
 
   const driving = control === "drive";
+  const lastScreen = lastScreenshotUrl ?? finding?.screenshot_url ?? null;
 
   return (
     <section
-      className="flex w-full flex-col gap-4 bg-white p-4 text-zinc-900 sm:p-6 dark:bg-zinc-950 dark:text-zinc-100"
+      id={id}
+      className="@container flex w-full flex-col gap-5 text-fg"
       aria-label="Session"
       data-run-id={runId}
     >
       <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="flex min-w-0 flex-col gap-2">
           {finding && (
-            <p className="text-xs font-medium uppercase tracking-wide text-pine-600 dark:text-pine-50/70">
+            <span
+              className={`w-fit rounded-full border px-2.5 py-0.5 text-xs font-medium ${LEVEL_PILL[finding.level] ?? LEVEL_PILL.old_bug}`}
+            >
               {LEVEL_TEXT[finding.level] ?? finding.level}
-            </p>
+            </span>
           )}
-          <h2 className="text-lg font-semibold text-pine-900 sm:text-xl dark:text-pine-50">
+          <h2 className="text-lg font-semibold text-balance text-fg sm:text-xl">
             {finding?.title ?? "Session"}
           </h2>
         </div>
@@ -159,131 +201,218 @@ export function SessionPanel({ runId, missionId, finding, onClose, fake = false 
           type="button"
           onClick={onClose}
           aria-label="Close the panel"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className={`flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted transition-colors hover:bg-surface-2 hover:text-fg ${FOCUS}`}
         >
           <X className="h-5 w-5" aria-hidden />
         </button>
       </header>
 
-      {fake ? (
-        finding?.screenshot_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={finding.screenshot_url}
-            alt="Screenshot of the desktop at the bug"
-            className="aspect-video w-full rounded-lg bg-zinc-200 object-contain dark:bg-zinc-800"
-          />
-        ) : (
-          <DesktopMessage text="Sample desktop. The live desktop shows here." />
-        )
+      {ended ? (
+        <LastScreen url={lastScreen} />
       ) : (
-        <LiveDesktop missionId={missionId} control={control} onInput={onInput} />
+        <LiveDesktop
+          missionId={missionId}
+          control={control}
+          onInput={onInput}
+          onStatus={onDesktopStatus}
+        />
       )}
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="flex items-center gap-2 text-sm" aria-live="polite">
-          {driving ? (
-            <>
-              <Hand className="h-4 w-4 text-pine-600" aria-hidden />
-              You have control.
-            </>
-          ) : (
-            <>
-              <Bot className="h-4 w-4 text-zinc-500" aria-hidden />
-              The agent has control.
-            </>
+      {live && (
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-3 @md:flex-row @md:items-center @md:justify-between @md:pl-4">
+            <p className="flex items-center gap-2 text-sm" aria-live="polite">
+              {driving ? (
+                <>
+                  <Hand className="h-4 w-4 text-accent" aria-hidden />
+                  You have control.
+                </>
+              ) : (
+                <>
+                  <Bot className="h-4 w-4 text-muted" aria-hidden />
+                  The agent has control.
+                </>
+              )}
+            </p>
+            <button
+              type="button"
+              disabled={controlBusy}
+              onClick={() => changeControl(driving ? "release" : "take")}
+              className={`min-h-12 w-full rounded-full px-5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 @md:w-auto ${FOCUS} ${
+                driving
+                  ? "border border-border bg-surface text-fg hover:bg-surface-2"
+                  : "bg-accent text-accent-fg hover:bg-accent-hover"
+              }`}
+            >
+              {controlBusy ? "Wait..." : driving ? "Release control" : "Take control"}
+            </button>
+          </div>
+          {controlError && (
+            <p className="px-1 text-sm text-danger" role="alert">
+              {controlError}
+            </p>
           )}
-        </p>
-        <button
-          type="button"
-          disabled={controlBusy}
-          onClick={() => changeControl(driving ? "release" : "take")}
-          className="min-h-11 w-full rounded-md border border-pine-600 px-4 text-sm font-medium text-pine-900 hover:bg-pine-50 disabled:opacity-50 sm:w-auto dark:text-pine-50 dark:hover:bg-pine-900"
-        >
-          {controlBusy ? "Wait..." : driving ? "Release control" : "Take control"}
-        </button>
-      </div>
-      {controlError && (
-        <p className="text-sm text-red-700 dark:text-red-400" role="status">
-          {controlError}
-        </p>
+        </div>
       )}
 
       {finding ? (
         <>
-          <div className="flex flex-col gap-3 text-sm">
-            {finding.steps.length > 0 && (
-              <div>
-                <h3 className="mb-1 font-semibold">Steps</h3>
-                <ol className="list-decimal space-y-1 pl-5">
-                  {finding.steps.map((step, i) => (
-                    <li key={i}>{step}</li>
-                  ))}
-                </ol>
-              </div>
+          {finding.steps.length > 0 && (
+            <div className="rounded-2xl border border-border bg-surface p-4">
+              <h3 className="mb-3 text-sm font-semibold">Steps</h3>
+              {/* role="list" keeps list semantics in Safari after list-style: none. */}
+              <ol role="list" className="flex list-none flex-col gap-2.5 text-sm">
+                {finding.steps.map((step, i) => (
+                  <li key={i} className="flex items-start gap-3">
+                    <span
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent tabular-nums"
+                      aria-hidden
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="min-w-0 pt-0.5 break-words">{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          <div className="grid gap-3 @lg:grid-cols-2">
+            <Tile label="Expected" text={finding.expected} tone="plain" />
+            <Tile label="Saw" text={finding.saw} tone="danger" />
+            {finding.production_saw && (
+              <Tile
+                label="Production"
+                text={finding.production_saw}
+                tone="soft"
+                className="@lg:col-span-2"
+              />
             )}
-            <Field label="Expected" text={finding.expected} />
-            <Field label="Saw" text={finding.saw} />
-            {finding.production_saw && <Field label="Production" text={finding.production_saw} />}
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              disabled={decisionBusy || decision !== null}
-              onClick={() => decide("bug")}
-              className={`min-h-12 w-full rounded-md px-4 text-base font-semibold text-white disabled:cursor-not-allowed sm:flex-1 ${
-                decision === "bug" ? "bg-red-700" : "bg-red-600 hover:bg-red-700"
-              } ${decision !== null && decision !== "bug" ? "opacity-40" : ""}`}
-            >
-              Bug
-            </button>
-            <button
-              type="button"
-              disabled={decisionBusy || decision !== null}
-              onClick={() => decide("not_bug")}
-              className={`min-h-12 w-full rounded-md px-4 text-base font-semibold text-white disabled:cursor-not-allowed sm:flex-1 ${
-                decision === "not_bug" ? "bg-pine-900" : "bg-pine-600 hover:bg-pine-900"
-              } ${decision !== null && decision !== "not_bug" ? "opacity-40" : ""}`}
-            >
-              Not a bug
-            </button>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 @md:flex-row">
+              <button
+                type="button"
+                disabled={decisionBusy || decision !== null}
+                aria-pressed={decision === "bug"}
+                onClick={() => decide("bug")}
+                className={`min-h-12 w-full rounded-full bg-danger px-5 text-base font-semibold text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:hover:bg-danger @md:flex-1 dark:text-bg ${FOCUS} ${
+                  decision !== null && decision !== "bug" ? "opacity-40" : ""
+                }`}
+              >
+                Bug
+              </button>
+              <button
+                type="button"
+                disabled={decisionBusy || decision !== null}
+                aria-pressed={decision === "not_bug"}
+                onClick={() => decide("not_bug")}
+                className={`min-h-12 w-full rounded-full border border-border bg-surface px-5 text-base font-semibold text-fg transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:hover:bg-surface @md:flex-1 ${FOCUS} ${
+                  decision !== null && decision !== "not_bug" ? "opacity-40" : ""
+                }`}
+              >
+                Not a bug
+              </button>
+            </div>
+
+            {/* The live region stays in the page so screen readers announce the change. */}
+            <div role="status" aria-live="polite">
+              {decisionBusy && <p className="px-1 text-sm text-muted">Wait...</p>}
+              {decision && (
+                <p className="flex items-center gap-2 rounded-2xl bg-accent-soft px-4 py-3 text-sm font-medium text-fg">
+                  <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+                  {decisionText(decision, decidedAt)}
+                </p>
+              )}
+            </div>
+            {decisionError && (
+              <p className="px-1 text-sm text-danger" role="alert">
+                {decisionError}
+              </p>
+            )}
           </div>
-          {decisionBusy && <p className="text-sm">Wait...</p>}
-          {decision && (
-            <p className="flex items-center gap-2 text-sm font-medium" role="status">
-              <Check className="h-4 w-4 text-pine-600" aria-hidden />
-              {decisionText(decision, decidedAt)}
-            </p>
-          )}
-          {decisionError && (
-            <p className="text-sm text-red-700 dark:text-red-400" role="alert">
-              {decisionError}
-            </p>
-          )}
 
           {decision === "bug" && (
-            <div className="rounded-lg border border-dashed border-zinc-300 p-4 dark:border-zinc-700">
+            <div className="rounded-2xl border border-dashed border-border bg-surface p-4">
               <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                <Wrench className="h-4 w-4" aria-hidden />
+                <Wrench className="h-4 w-4 text-muted" aria-hidden />
                 Fix
               </h3>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">The fix shows here.</p>
+              <p className="text-sm text-muted">The fix shows here.</p>
             </div>
           )}
         </>
       ) : (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">This computer has no finding.</p>
+        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-muted">
+          This mission has no finding.
+        </p>
       )}
     </section>
   );
 }
 
-function Field({ label, text }: { label: string; text: string }) {
+function SoftBox({ text }: { text: string }) {
   return (
-    <div>
-      <h3 className="mb-1 font-semibold">{label}</h3>
-      <p className="whitespace-pre-wrap">{text}</p>
+    <div className="flex aspect-video w-full items-center justify-center rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted">
+      {text}
+    </div>
+  );
+}
+
+// The panel shows the last screen when there is no live desktop.
+function LastScreen({ url }: { url: string | null }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [url]);
+
+  if (!url || broken) {
+    return (
+      <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted">
+        <MonitorOff className="h-5 w-5" aria-hidden />
+        No live computer for this mission.
+      </div>
+    );
+  }
+
+  return (
+    <figure className="flex flex-col gap-2">
+      <figcaption className="flex w-fit items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-muted">
+        <MonitorOff className="h-3.5 w-3.5" aria-hidden />
+        Live session ended. This is the last screen.
+      </figcaption>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt="Last screen of the mission computer"
+        onError={() => setBroken(true)}
+        className="aspect-video w-full rounded-2xl bg-surface-2 object-contain"
+      />
+    </figure>
+  );
+}
+
+function Tile({
+  label,
+  text,
+  tone,
+  className = "",
+}: {
+  label: string;
+  text: string;
+  tone: "plain" | "danger" | "soft";
+  className?: string;
+}) {
+  const box =
+    tone === "danger"
+      ? "border-danger/25 bg-danger-soft"
+      : tone === "soft"
+        ? "border-border bg-surface-2"
+        : "border-border bg-surface";
+  const head = tone === "danger" ? "text-danger" : "text-muted";
+  return (
+    <div className={`rounded-2xl border p-4 ${box} ${className}`}>
+      <h3 className={`mb-1.5 text-xs font-semibold tracking-wide uppercase ${head}`}>{label}</h3>
+      <p className="text-sm break-words whitespace-pre-wrap">{text}</p>
     </div>
   );
 }
