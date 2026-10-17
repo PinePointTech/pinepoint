@@ -29,6 +29,7 @@ export {
   type Decision,
   type FollowUp,
 } from "./decide";
+export { createRun, createNoPreviewRun, listRecentRuns, type CreateRunInput } from "./create";
 export {
   startRun,
   advanceRun,
