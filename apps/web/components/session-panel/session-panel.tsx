@@ -115,15 +115,19 @@ export function SessionPanel({ runId, missionId, finding, onClose, fake = false 
     setDecisionError(null);
     try {
       let at: string | null = null;
+      let stored: Decision = value;
       if (fake) {
         await wait(300);
       } else {
+        // The route can return a decision that another request stored first.
         const reply = (await postJson(`/api/findings/${encodeURIComponent(finding.id)}/decision`, {
           decision: value,
-        })) as { decided_at?: unknown };
-        if (typeof reply?.decided_at === "string") at = reply.decided_at;
+        })) as { decision?: unknown; decidedAt?: unknown; decided_at?: unknown };
+        const replyAt = reply?.decidedAt ?? reply?.decided_at;
+        if (typeof replyAt === "string") at = replyAt;
+        if (reply?.decision === "bug" || reply?.decision === "not_bug") stored = reply.decision;
       }
-      setDecision(value);
+      setDecision(stored);
       setDecidedAt(at ?? new Date().toISOString());
     } catch {
       setDecisionError("The decision did not save. Try again.");
