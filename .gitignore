@@ -21,3 +21,9 @@ next-env.d.ts
 .DS_Store
 *.log
 coverage/
+
+# pnpm store created by sandboxed installs
+.pnpm-store/
+
+# spike output (screenshots, result.json)
+.spike-out/
