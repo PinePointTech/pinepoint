@@ -10,5 +10,8 @@
     "dev": "pnpm --filter web dev",
     "dev:store": "pnpm --filter demo-store dev",
     "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.1"
   }
 }
