@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { History, Play } from "lucide-react";
 import { createRun, formatCost, getRunStatus, listRuns } from "@/lib/app-api";
 import {
@@ -165,10 +164,7 @@ export function Dashboard() {
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 md:flex-row md:px-6">
       <aside className="md:w-64 md:shrink-0">
-        <Link href="/" className="text-xl font-semibold text-pine-900 dark:text-pine-50">
-          PinePoint
-        </Link>
-        <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
           <History className="h-4 w-4" />
           Last runs
         </h2>
