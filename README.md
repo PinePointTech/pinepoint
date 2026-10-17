@@ -46,6 +46,18 @@ pnpm --filter core test                    # crypto round trip and the handle st
 
 Both read `DATABASE_URL` and `ENCRYPTION_KEY` from `.env.local` at the repo root. `sql()` from `@pinepoint/core` is the query function. `saveHandle` and `loadHandle` keep Pine handles in `missions.pine_enc`, encrypted with AES-256-GCM. Local and Vercel share one database, so they must share one `ENCRYPTION_KEY`.
 
+## Planner
+
+`planMissions({ diff, qaMd, changedFiles })` in `@pinepoint/ai` turns a PR into 10 missions (plan section 8.1). It calls `PLANNER_MODEL`, validates the JSON with `PlanSchema` from `@pinepoint/core`, retries one time with the error text, and sets a target to null when its line is not an added or changed line on the right side of the diff.
+
+```sh
+pnpm --filter ai test                                                          # unit tests with a fake model, no network
+pnpm --filter ai test:planner -- --pr https://github.com/vihuynh72/pinepoint/pull/6   # the acceptance check on the planted PR
+pnpm --filter ai test:planner -- --diff path/to/file.diff                      # any saved diff
+```
+
+Until issue 07 reads the live diff, `--pr` loads `packages/ai/fixtures/<owner>-<repo>-pr-<number>.diff`. Both commands read `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
+
 ## Deploy
 
 Vercel builds every pushed branch as a preview and `main` as production. The project settings are Root Directory `apps/web` and framework Next.js. `engines` in `package.json` pins Node.js 22.x.
