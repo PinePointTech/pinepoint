@@ -1,19 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectionFromDelegation, type DelegatedConnection } from "@pinesandbox/computer-web";
 import { PineDesktop } from "@pinesandbox/computer-web/react";
+import type { DesktopStatus } from "./types";
 
 type Props = {
   missionId: string;
   control: "view" | "drive";
   onInput: () => void;
+  // "live" when the desktop connects. "ended" when the desktop request fails,
+  // the connection never becomes ready, or the reconnects stop.
+  onStatus: (status: Exclude<DesktopStatus, "starting">) => void;
 };
 
 type State =
   | { kind: "loading" }
-  | { kind: "error"; message: string }
+  | { kind: "error" }
   | { kind: "ready"; url: string; token: string };
+
+// The desktop must connect in this time, or the panel shows the last screen.
+const READY_MS = 30_000;
 
 // The desktop route can send the delegation as the body or as { delegation }.
 function readDelegation(body: unknown): DelegatedConnection | null {
@@ -33,16 +40,45 @@ function readToken(body: unknown): string | null {
   return readDelegation(body)?.transports.desktop_token.token ?? null;
 }
 
-export default function LiveDesktop({ missionId, control, onInput }: Props) {
+export default function LiveDesktop({ missionId, control, onInput, onStatus }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
-  const [lost, setLost] = useState(false);
+
+  // Keep the latest callback without restarting the effects below.
+  const statusRef = useRef(onStatus);
+  useEffect(() => {
+    statusRef.current = onStatus;
+  }, [onStatus]);
+
+  const connected = useRef(false);
+  const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearReadyTimer = useCallback(() => {
+    if (readyTimer.current) clearTimeout(readyTimer.current);
+    readyTimer.current = null;
+  }, []);
+
+  const end = useCallback(() => {
+    clearReadyTimer();
+    statusRef.current("ended");
+  }, [clearReadyTimer]);
 
   useEffect(() => {
     let live = true;
+    const abort = new AbortController();
+    connected.current = false;
+
+    // No Pine computer, or a computer that does not answer: stop waiting.
+    readyTimer.current = setTimeout(() => {
+      if (live && !connected.current) {
+        abort.abort();
+        statusRef.current("ended");
+      }
+    }, READY_MS);
+
     (async () => {
       try {
         const res = await fetch(`/api/missions/${encodeURIComponent(missionId)}/desktop`, {
           method: "POST",
+          signal: abort.signal,
         });
         if (!res.ok) throw new Error(String(res.status));
         const delegation = readDelegation(await res.json());
@@ -50,13 +86,18 @@ export default function LiveDesktop({ missionId, control, onInput }: Props) {
         const conn = connectionFromDelegation(delegation);
         if (live) setState({ kind: "ready", url: conn.url, token: conn.token });
       } catch {
-        if (live) setState({ kind: "error", message: "The desktop is not ready." });
+        if (!live) return;
+        setState({ kind: "error" });
+        end();
       }
     })();
+
     return () => {
       live = false;
+      abort.abort();
+      clearReadyTimer();
     };
-  }, [missionId]);
+  }, [missionId, end, clearReadyTimer]);
 
   // A desktop token lasts 120 seconds. The SDK calls this on each reconnect.
   const getToken = useCallback(async () => {
@@ -82,16 +123,29 @@ export default function LiveDesktop({ missionId, control, onInput }: Props) {
     };
   }, [state, getToken]);
 
+  const handleConnected = useCallback(() => {
+    connected.current = true;
+    clearReadyTimer();
+    statusRef.current("live");
+  }, [clearReadyTimer]);
+
+  // The parent shows the last screen when the desktop fails.
+  if (state.kind === "error") return null;
+
   if (state.kind === "loading") {
-    return <DesktopMessage text="The desktop is starting." />;
-  }
-  if (state.kind === "error") {
-    return <DesktopMessage text={state.message} />;
+    return (
+      <div
+        className="flex aspect-video w-full items-center justify-center rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted"
+        aria-busy="true"
+      >
+        The desktop is starting.
+      </div>
+    );
   }
 
   return (
     <div
-      className="relative aspect-video w-full overflow-hidden rounded-lg bg-black"
+      className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black"
       onPointerDown={onInput}
       onKeyDown={onInput}
       onWheel={onInput}
@@ -101,24 +155,11 @@ export default function LiveDesktop({ missionId, control, onInput }: Props) {
         token={tokenSource}
         control={control}
         reconnectMaxAttempts={5}
-        onConnected={() => setLost(false)}
-        onReconnectExhausted={() => setLost(true)}
+        onConnected={handleConnected}
+        onReconnectExhausted={end}
         onError={() => undefined}
         style={{ width: "100%", height: "100%" }}
       />
-      {lost && (
-        <div className="absolute inset-x-0 bottom-0 bg-black/70 px-3 py-2 text-sm text-white">
-          The connection to the desktop stopped. Close the panel and open it again.
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function DesktopMessage({ text }: { text: string }) {
-  return (
-    <div className="flex aspect-video w-full items-center justify-center rounded-lg bg-zinc-200 px-4 text-center text-sm text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-      {text}
     </div>
   );
 }
