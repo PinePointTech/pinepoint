@@ -5,14 +5,21 @@
   "description": "Octokit helpers.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --env-file-if-exists=../../.env.local --import tsx --test \"src/**/*.test.ts\"",
+    "test:review": "node --env-file-if-exists=../../.env.local --import tsx scripts/review.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@octokit/rest": "22.0.1"
   }
 }

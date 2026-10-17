@@ -19,6 +19,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.2.0"
+    "@neondatabase/serverless": "^1.2.0",
+    "zod": "^4.6.7"
   }
 }
