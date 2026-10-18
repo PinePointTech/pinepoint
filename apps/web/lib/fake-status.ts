@@ -118,7 +118,7 @@ function sampleUsage(i: number) {
   };
 }
 
-// The step pictures the runner saves in missions.result.steps.
+// The step pictures the runner saves in missions.result.step_shots.
 function sampleSteps(i: number) {
   const steps = [{ url: "/demo/store-home.png", title: "Open the store", at: null }];
   if (i === BUG_INDEX) {
@@ -146,7 +146,7 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
       new_feature: i === BUG_INDEX,
       url: PREVIEW_URL,
       status,
-      result: t >= endAt(i) ? { steps: sampleSteps(i) } : null,
+      result: t >= endAt(i) ? { step_shots: sampleSteps(i) } : null,
       screenshot_url:
         t >= endAt(i) && i === BUG_INDEX
           ? "/demo/coupon-bug.png"

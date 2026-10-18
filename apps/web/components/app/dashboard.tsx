@@ -26,9 +26,9 @@ import { findingFor, tileState } from "./tile-state";
 
 const POLL_MS = 3000;
 
-// missions.result.steps: the runner's pictures of the screen after each step.
+// missions.result.step_shots: the runner's pictures of the screen after each step.
 function stepsOf(result: unknown): StepShotView[] {
-  const steps = (result as { steps?: unknown } | null)?.steps;
+  const steps = (result as { step_shots?: unknown } | null)?.step_shots;
   if (!Array.isArray(steps)) return [];
   return steps.filter(
     (s): s is StepShotView => !!s && typeof s === "object" && typeof (s as StepShotView).url === "string",

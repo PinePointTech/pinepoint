@@ -318,7 +318,7 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
   const steps = await collectStepShots(handle, mission.id).catch(() => []);
   const shotUrl = failShotUrl ?? steps.at(-1)?.url ?? null;
   if (shotUrl || steps.length > 0) {
-    const stepsJson = JSON.stringify({ steps });
+    const stepsJson = JSON.stringify({ step_shots: steps });
     await sql()`
       update missions
       set screenshot_url = coalesce(${shotUrl}, screenshot_url),

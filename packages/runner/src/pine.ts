@@ -235,7 +235,7 @@ export async function uploadScreenshot(missionId: string, bytes: Uint8Array): Pr
   return blob.url;
 }
 
-/** One picture of the screen after an agent step, stored in Vercel Blob. Saved in missions.result.steps. */
+/** One picture of the screen after an agent step, stored in Vercel Blob. Saved in missions.result.step_shots (result.steps holds the agent's own text steps). */
 export interface StepShot {
   url: string;
   /** The step's title from Pine, for example "Click Add to cart". Empty when the frame has no step. */
@@ -297,6 +297,18 @@ export async function collectStepShots(handle: PineHandle, missionId: string): P
     }
   } catch (err) {
     console.warn(`[runner] could not read frames for mission ${missionId}: ${(err as Error).message}`);
+  }
+
+  if (frames.length === 0) {
+    // No frame events came back. Take one picture of the screen as it is now, so the mission has a last screen.
+    try {
+      const shot = await session.drive.screenshot({ signal: AbortSignal.timeout(15_000) });
+      if (shot.screenshot) {
+        frames.push({ data: Buffer.from(shot.screenshot, "base64"), mediaType: "image/png", title: "Last screen", at: new Date().toISOString() });
+      }
+    } catch (err) {
+      console.warn(`[runner] could not take the last screenshot for mission ${missionId}: ${(err as Error).message}`);
+    }
   }
 
   const picked = sampleEvenly(frames, MAX_STEP_SHOTS);

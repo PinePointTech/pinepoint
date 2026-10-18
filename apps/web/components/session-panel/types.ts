@@ -28,7 +28,7 @@ export type FindingView = {
 // "ended": there is no live desktop (sample data, a failed request, or a stopped computer).
 export type DesktopStatus = "starting" | "live" | "ended";
 
-// One picture of the screen after an agent step. The runner saves them in missions.result.steps.
+// One picture of the screen after an agent step. The runner saves them in missions.result.step_shots.
 export type StepShotView = { url: string; title: string; at: string | null };
 
 export type SessionPanelProps = {
