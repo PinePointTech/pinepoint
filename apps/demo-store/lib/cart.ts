@@ -8,8 +8,17 @@ export const emptyCart: Cart = { lines: [], coupons: [] };
 export const SHIPPING_CENTS = 400;
 export const FREE_SHIPPING_FROM_CENTS = 2000;
 
-// Percent off the subtotal, per code.
-const PERCENT_COUPONS: Record<string, number> = { SAVE10: 10 };
+// Percent off the subtotal, per code. Only one code per order.
+type PercentCoupon = { percent: number; minItems: number };
+
+const PERCENT_COUPONS: Record<string, PercentCoupon> = {
+  SAVE10: { percent: 10, minItems: 0 },
+  BUNDLE15: { percent: 15, minItems: 3 },
+};
+
+export function itemCount(cart: Cart): number {
+  return cart.lines.reduce((sum, line) => sum + line.quantity, 0);
+}
 
 export function addItem(cart: Cart, productId: string): Cart {
   const line = cart.lines.find((l) => l.productId === productId);
@@ -30,11 +39,22 @@ export function applyCoupon(
   input: string,
 ): { cart: Cart; message: string } {
   const code = input.trim().toUpperCase();
-  if (!(code in PERCENT_COUPONS)) {
+  const coupon = PERCENT_COUPONS[code];
+  if (!coupon) {
     return { cart, message: "Coupon not valid." };
   }
-  if (cart.coupons.includes(code)) {
-    return { cart, message: "Coupon already applied." };
+  const appliedCode = cart.coupons.find((c) => c === code);
+  if (appliedCode) {
+    return {
+      cart,
+      message:
+        appliedCode === code
+          ? "Coupon already applied."
+          : "Only one discount code per order.",
+    };
+  }
+  if (itemCount(cart) < coupon.minItems) {
+    return { cart, message: `${code} needs ${coupon.minItems} or more items.` };
   }
   return {
     cart: { ...cart, coupons: [...cart.coupons, code] },
@@ -56,11 +76,14 @@ export function totals(cart: Cart): Totals {
     0,
   );
 
+  const count = itemCount(cart);
   let discountedCents = subtotalCents;
   for (const code of cart.coupons) {
-    const percent = PERCENT_COUPONS[code];
-    if (percent) {
-      discountedCents = Math.round((discountedCents * (100 - percent)) / 100);
+    const coupon = PERCENT_COUPONS[code];
+    if (coupon && count >= coupon.minItems) {
+      discountedCents = Math.round(
+        (discountedCents * (100 - coupon.percent)) / 100,
+      );
     }
   }
 

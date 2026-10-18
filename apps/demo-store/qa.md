@@ -29,10 +29,14 @@ Linen and Oat is a small demo store with three products. The cart is in browser 
 3. SAVE10 gives 10% off one time.
 4. A second SAVE10 shows "Coupon already applied." The total does not change.
 5. An unknown code shows "Coupon not valid."
+6. BUNDLE15 gives 15% off when the cart has 3 or more items. Count each item. Two of the same product are 2 items. Items in the cart shows the count.
+7. BUNDLE15 with fewer than 3 items shows "BUNDLE15 needs 3 or more items." The total does not change.
+8. Only one discount code per order. When SAVE10 or BUNDLE15 is applied, a different code shows "Only one discount code per order." The total does not change. The order of the codes is not important.
+9. If you remove a product after you apply BUNDLE15 and the cart has fewer than 3 items, BUNDLE15 gives no discount. Discount shows -$0.00.
 
 ## Test data
 
-Coupon codes: SAVE10.
+Coupon codes: SAVE10, BUNDLE15.
 
 ## Expected totals
 
@@ -45,6 +49,12 @@ Coupon codes: SAVE10.
 | Add Linen tea towel set | $20.00 | |
 | Add all three products. Apply SAVE10. | $44.10 | SAVE10 applied. |
 | Add Sage linen apron. Apply WELCOME. | $24.00 | Coupon not valid. |
+| Add all three products. Apply BUNDLE15. | $41.65 | BUNDLE15 applied. |
+| Add Oat oven glove three times. Apply BUNDLE15. | $22.95 | BUNDLE15 applied. |
+| Add Sage linen apron and Oat oven glove. Apply BUNDLE15. | $33.00 | BUNDLE15 needs 3 or more items. |
+| Add all three products. Apply BUNDLE15 two times. | $41.65 | Coupon already applied. |
+| Add all three products. Apply SAVE10. Apply BUNDLE15. | $44.10 | Only one discount code per order. |
+| Add all three products. Apply BUNDLE15. Apply SAVE10. | $41.65 | Only one discount code per order. |
 
 ## Never do
 
