@@ -1,84 +1,85 @@
-# pinepoint
-Your automated QA/Code Review agents built on Pine Computers
+# PinePoint
 
-## Layout
+**QA agents for every pull request.** PinePoint sends 10 simulated users through your Vercel preview, each on its own Pine Computer with a real browser, and posts what broke as a review on the PR.
 
-pnpm workspace (plan section 4.1):
+![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![Node 22](https://img.shields.io/badge/Node-22-339933) ![pnpm 10](https://img.shields.io/badge/pnpm-10-F69220) ![Pine Computers](https://img.shields.io/badge/runs%20on-Pine%20Computers-2f6f4f) ![Vercel](https://img.shields.io/badge/deploy-Vercel-000)
 
-| Path | What |
-| --- | --- |
-| `apps/web` | Next.js App Router app. Landing page at `/`, app at `/app`, API routes under `app/api`. Vercel project `pinepoint`. |
-| `apps/demo-store` | Next.js demo store. It gets its own Vercel project (VI-6). |
-| `packages/core` | Shared types, zod schemas, database access, encryption. |
-| `packages/runner` | Pine Computer wrapper. Server code only. |
-| `packages/github` | Octokit helpers. |
-| `packages/ai` | Anthropic calls: planner, STE rewrite, STE lint, fix. |
+**Live:** [pinepoint-rho.vercel.app](https://pinepoint-rho.vercel.app) (app at [`/app`](https://pinepoint-rho.vercel.app/app)) · Demo store: [pinepoint-demo-store.vercel.app](https://pinepoint-demo-store.vercel.app)
 
-The packages ship TypeScript source. `apps/web` compiles them through `transpilePackages` in `next.config.ts`.
+## How a run works
 
-## Run
+```mermaid
+flowchart LR
+  PR["Pull request"] --> P["Planner (Claude) reads diff + qa.md"]
+  P --> M["10 missions: Flow, UI, Abuse, Access, Safety"]
+  M --> C["Pine Computers test the preview"]
+  C --> F["Failures: flake re-run + production check"]
+  F --> R["Review posted on the PR"]
+```
+
+Watch it live in `/app`: mission cards by lens, the live desktop (take control, full screen), screenshots of each step, and the real cost.
+
+## Cost
+
+Pine reports tokens and cost for each mission. On 60 real missions, Pine charged about **$0.012 per mission** and **$0.14 to $0.16 per run**. The run page compares the same tokens at six model list prices, cache rates included.
+
+## Demo PRs
+
+Draft PRs with a planted bug. Never merge them.
+
+| PR | Bug | Expected | Preview shows |
+| --- | --- | --- | --- |
+| [#10](https://github.com/vihuynh72/pinepoint/pull/10) | Coupon applies two times | $21.60 | $19.44 |
+| [#29](https://github.com/vihuynh72/pinepoint/pull/29) | Remove one goes below zero | Empty cart | $-20.00 |
+| [#31](https://github.com/vihuynh72/pinepoint/pull/31) | Express shipping turns free | $36.00 | $24.00 |
+| [#33](https://github.com/vihuynh72/pinepoint/pull/33) | Two coupons stack | $44.10 | $37.49 |
+| [#34](https://github.com/vihuynh72/pinepoint/pull/34) | Saved cart doubles on reload | $24.00 | $48.00 |
+| [#11](https://github.com/vihuynh72/pinepoint/pull/11) | None (clean control) | | |
+
+The list is in [`eval/planted.json`](eval/planted.json).
+
+## Quick start
 
 Node.js 22 and pnpm 10.
 
 ```sh
 pnpm install
-pnpm -r build          # the acceptance build
-pnpm dev               # apps/web on http://localhost:3000
-pnpm dev:store         # apps/demo-store on http://localhost:3001
+pnpm -r build     # build everything
+pnpm dev          # apps/web on http://localhost:3000
+pnpm dev:store    # apps/demo-store on http://localhost:3001
 ```
 
-## Environment
+Copy `.env.example` to `apps/web/.env.local` and fill it in. Never commit a value: the repo is public. `GET /api/health` shows which variables a deployment has, as `true` or `false`.
 
-Copy `.env.example` to `apps/web/.env.local` and fill it in. Never commit a value. The repo is public.
+## Layout
 
-On Vercel the values live in the project settings. Blob and Neon come from the Storage integrations. Variables apply only to deployments built after you save them, so redeploy after a change.
+| Path | What |
+| --- | --- |
+| `apps/web` | Next.js app: landing at `/`, app at `/app`, API under `app/api` |
+| `apps/demo-store` | The demo store that the planted PRs change |
+| `packages/core` | Types, zod schemas, database, encryption |
+| `packages/runner` | Pine Computer wrapper and run orchestration |
+| `packages/github` | PR context, review posting, webhook checks |
+| `packages/ai` | Planner and other Claude calls |
+| `db/` | Postgres schema (Neon) |
 
-`GET /api/health` shows which variables a deployment has, as `true` or `false`. It never shows a value.
-
-## Database
-
-Neon Postgres. The schema lives in `db/*.sql` (plan section 4.3). `packages/core` owns the access code:
+## Database and tests
 
 ```sh
-pnpm --filter @pinepoint/core db:migrate   # apply db/*.sql in order; safe to run twice
-pnpm --filter core test                    # crypto round trip and the handle store round trip
+pnpm --filter @pinepoint/core db:migrate   # apply db/*.sql; safe to run twice
+pnpm --filter core test
+pnpm --filter ai test
+pnpm --filter @pinepoint/runner test
+pnpm --filter @pinepoint/github test
 ```
-
-Both read `DATABASE_URL` and `ENCRYPTION_KEY` from `.env.local` at the repo root. `sql()` from `@pinepoint/core` is the query function. `saveHandle` and `loadHandle` keep Pine handles in `missions.pine_enc`, encrypted with AES-256-GCM. Local and Vercel share one database, so they must share one `ENCRYPTION_KEY`.
-
-## Planner
-
-`planMissions({ diff, qaMd, changedFiles })` in `@pinepoint/ai` turns a PR into 10 missions (plan section 8.1). It calls `PLANNER_MODEL`, validates the JSON with `PlanSchema` from `@pinepoint/core`, retries one time with the error text, and sets a target to null when its line is not an added or changed line on the right side of the diff.
-
-```sh
-pnpm --filter ai test                                                          # unit tests with a fake model, no network
-pnpm --filter ai test:planner -- --pr https://github.com/vihuynh72/pinepoint/pull/6   # the acceptance check on the planted PR
-pnpm --filter ai test:planner -- --diff path/to/file.diff                      # any saved diff
-```
-
-Until issue 07 reads the live diff, `--pr` loads `packages/ai/fixtures/<owner>-<repo>-pr-<number>.diff`. Both commands read `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
-
-## Deploy
-
-Vercel builds every pushed branch as a preview and `main` as production. The project settings are Root Directory `apps/web` and framework Next.js. `engines` in `package.json` pins Node.js 22.x.
 
 ## GitHub webhook
 
-When a PR that changes `apps/demo-store/` is opened or updated, PinePoint starts a run by itself and posts its review on the PR. Nobody needs to press Run in `/app`.
-
-`POST /api/github/webhook` checks `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET`. It takes `pull_request` (opened, reopened, synchronize, ready_for_review; drafts too) and `deployment_status` (success, a demo store preview, not Production). The preview is usually not ready at `pull_request` time, so the `deployment_status` event is the one that starts most runs. A PR that changes no file under `PINEPOINT_WEBHOOK_PATHS` (default `apps/demo-store/`) is skipped. One run per PR head SHA: a second event for the same commit is skipped. With no preview yet, the webhook answers 202 and waits for the next event; it does not post "No preview. No test.".
-
-The run drives itself in `after()`: about 240 seconds per function call, then a signed call to `POST /api/runs/[id]/drive` for the next slice, for at most 40 minutes from the run's start. When every mission has ended, the review posts on the PR (the same happens for runs started from `/app`).
-
-Setup:
+When a demo store preview deploys for an open PR that changes `apps/demo-store/`, PinePoint starts a run by itself, drives it with nobody on `/app`, and posts the review.
 
 1. Make a secret: `openssl rand -hex 32`.
-2. Vercel, project `pinepoint`, Settings, Environment Variables: add `GITHUB_WEBHOOK_SECRET` with that value. Check that `APP_BASE_URL` is `https://pinepoint-rho.vercel.app`. Optional: `PINEPOINT_WEBHOOK_PATHS`. Redeploy production.
-3. GitHub, `vihuynh72/pinepoint`, Settings, Webhooks, Add webhook:
-   - Payload URL: `https://pinepoint-rho.vercel.app/api/github/webhook`
-   - Content type: `application/json`
-   - Secret: the same value
-   - Events: "Let me select individual events", then "Pull requests" and "Deployment statuses" only
-4. GitHub sends a ping. Recent Deliveries shows 200. `GET /api/health` shows `GITHUB_WEBHOOK_SECRET: true`.
+2. Vercel project `pinepoint`: add `GITHUB_WEBHOOK_SECRET`, check `APP_BASE_URL` is `https://pinepoint-rho.vercel.app`, then redeploy.
+3. GitHub repo Settings, Webhooks: payload URL `https://pinepoint-rho.vercel.app/api/github/webhook`, content type `application/json`, the same secret, events "Pull requests" and "Deployment statuses".
+4. The ping in Recent Deliveries shows 200.
 
-The first delivery that claims a commit creates the `webhook_claims` table (`db/003_webhook_claims.sql`) when it is missing, so no manual migration is needed. Each delivery's response body says what happened (`skipped`, `waiting` or `starting`). Redeliver from Recent Deliveries to try again.
+Optional: `PINEPOINT_WEBHOOK_PATHS` (default `apps/demo-store/`).
