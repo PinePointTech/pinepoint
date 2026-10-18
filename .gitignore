@@ -27,3 +27,6 @@ coverage/
 
 # spike output (screenshots, result.json)
 .spike-out/
+
+# Claude Code workflow worktrees
+.claude/worktrees/

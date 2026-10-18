@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Check, Hand, MonitorOff, Wrench, X } from "lucide-react";
+import { Bot, Check, Hand, Maximize2, Minimize2, MonitorOff, Wrench, X } from "lucide-react";
 import type { Decision, DesktopStatus, FindingView, SessionPanelProps } from "./types";
 
 // The desktop SDK uses browser APIs. Load it only in the browser.
@@ -207,16 +207,18 @@ export function SessionPanel({
         </button>
       </header>
 
-      {ended ? (
-        <LastScreen url={lastScreen} />
-      ) : (
-        <LiveDesktop
-          missionId={missionId}
-          control={control}
-          onInput={onInput}
-          onStatus={onDesktopStatus}
-        />
-      )}
+      <FullScreenFrame>
+        {ended ? (
+          <LastScreen url={lastScreen} />
+        ) : (
+          <LiveDesktop
+            missionId={missionId}
+            control={control}
+            onInput={onInput}
+            onStatus={onDesktopStatus}
+          />
+        )}
+      </FullScreenFrame>
 
       {live && (
         <div className="flex flex-col gap-1">
@@ -356,6 +358,92 @@ function SoftBox({ text }: { text: string }) {
   return (
     <div className="flex aspect-video w-full items-center justify-center rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted">
       {text}
+    </div>
+  );
+}
+
+// Wraps the desktop or the last screen with a Full screen button. It uses the
+// Fullscreen API, and falls back to a fixed full-window layer where the API is
+// missing (for example iPhone Safari). Esc leaves full screen.
+function FullScreenFrame({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [native, setNative] = useState(false);
+  const [fallback, setFallback] = useState(false);
+  const full = native || fallback;
+
+  useEffect(() => {
+    const sync = () => setNative(document.fullscreenElement === ref.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!fallback) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setFallback(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [fallback]);
+
+  async function toggle() {
+    if (native) {
+      await document.exitFullscreen().catch(() => {});
+      return;
+    }
+    if (fallback) {
+      setFallback(false);
+      return;
+    }
+    const el = ref.current;
+    if (el && document.fullscreenEnabled && el.requestFullscreen) {
+      try {
+        await el.requestFullscreen();
+        return;
+      } catch {
+        // Fall through to the fixed layer.
+      }
+    }
+    setFallback(true);
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={
+        full
+          ? "fixed inset-0 z-50 flex flex-col gap-3 bg-bg p-3 sm:p-5"
+          : "relative flex flex-col gap-2"
+      }
+    >
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-pressed={full}
+          className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-sm text-fg transition-colors hover:border-accent hover:text-accent ${FOCUS}`}
+        >
+          {full ? (
+            <Minimize2 className="h-4 w-4" aria-hidden />
+          ) : (
+            <Maximize2 className="h-4 w-4" aria-hidden />
+          )}
+          {full ? "Exit full screen" : "Full screen"}
+        </button>
+      </div>
+      <div className={full ? "flex min-h-0 flex-1 items-center justify-center" : ""}>
+        <div
+          className={
+            full ? "w-full max-w-[calc((100dvh-6rem)*16/9)]" : "w-full"
+          }
+        >
+          {children}
+        </div>
+      </div>
     </div>
   );
 }

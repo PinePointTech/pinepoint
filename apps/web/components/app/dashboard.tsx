@@ -19,6 +19,7 @@ import {
   type StatusResponse,
 } from "@/lib/app-types";
 import { SessionPanel, type FindingView } from "@/components/session-panel";
+import { Activity } from "./activity";
 import { CostCard } from "./cost-card";
 import { MissionGroups } from "./mission-groups";
 import { findingFor, tileState } from "./tile-state";
@@ -108,6 +109,15 @@ export function Dashboard() {
   // A shared ?finding= link opens a finished run. Fake data skips the wait.
   const [complete] = useState(() => findingParam !== null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const fullscreenExitAt = useRef(0);
+
+  useEffect(() => {
+    const onChange = () => {
+      if (!document.fullscreenElement) fullscreenExitAt.current = Date.now();
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   const usingFake = fakeParam || status?.fake === true;
 
@@ -358,7 +368,7 @@ export function Dashboard() {
               </div>
               {usingFake && (
                 <p className="-mt-2 text-sm text-muted">
-                  The run routes are not ready. This is sample data.
+                  This is sample data, not a real run.
                 </p>
               )}
 
@@ -416,6 +426,19 @@ export function Dashboard() {
                 />
               </div>
 
+              {!runEnded && (
+                <Activity
+                  status={status.run.status}
+                  running={previewMissions.filter((m) => m.status === "running").length}
+                  total={total}
+                  seconds={
+                    status.run.started_at
+                      ? Math.max(0, Math.round((Date.now() - Date.parse(status.run.started_at)) / 1000))
+                      : null
+                  }
+                />
+              )}
+
               <ul className="flex flex-wrap gap-2" aria-label="Run summary">
                 <Chip label="Bugs" value={counts.bugs} tone="border-danger/40 bg-danger-soft text-danger" />
                 <Chip
@@ -456,6 +479,15 @@ export function Dashboard() {
       <dialog
         ref={dialogRef}
         aria-label="Session"
+        onCancel={(e) => {
+          // Esc that leaves full screen must not also close the drawer.
+          if (document.fullscreenElement) {
+            e.preventDefault();
+            document.exitFullscreen().catch(() => {});
+          } else if (Date.now() - fullscreenExitAt.current < 600) {
+            e.preventDefault();
+          }
+        }}
         onClose={() => {
           if (panelOpen) closePanel();
         }}
