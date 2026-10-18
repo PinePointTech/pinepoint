@@ -14,7 +14,8 @@ flowchart LR
   P --> M["10 missions: Flow, UI, Abuse, Access, Safety"]
   M --> C["Pine Computers test the preview"]
   C --> F["Failures: flake re-run + production check"]
-  F --> R["Review posted on the PR"]
+  F --> B["Findings: Bug, Possible, Old bug (STE text)"]
+  B --> R["Review posted on the PR"]
 ```
 
 Watch it live in `/app`: mission cards by lens, the live desktop (take control, full screen), screenshots of each step, and the real cost.
@@ -69,6 +70,7 @@ Copy `.env.example` to `apps/web/.env.local` and fill it in. Never commit a valu
 pnpm --filter @pinepoint/core db:migrate   # apply db/*.sql; safe to run twice
 pnpm --filter core test
 pnpm --filter ai test
+pnpm --filter ai test:findings -- --run RUN_ID   # build or show a finished run's findings
 pnpm --filter @pinepoint/runner test
 pnpm --filter @pinepoint/github test
 ```

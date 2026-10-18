@@ -10,8 +10,8 @@ import { advanceRun } from "@pinepoint/runner";
 import { driveToken } from "@pinepoint/github/webhook";
 import "./run-hooks";
 
-/** Time for the loop in one function call. maxDuration is 300 seconds; the rest is margin. */
-export const DRIVE_SLICE_MS = 240_000;
+/** Time for the loop in one function call. maxDuration is 300 seconds; the rest leaves room for the completion hook (findings rewrite and review). */
+export const DRIVE_SLICE_MS = 170_000;
 /** The whole chain stops this long after the run started. The /app poll can still finish it. */
 export const DRIVE_CAP_MS = 40 * 60_000;
 /** The gap between two advanceRun calls, the same as the dashboard poll. */

@@ -1,4 +1,4 @@
-// Registers the run completion hook: post the PR review when every mission of a run has ended.
+// Registers the run completion hook: build the findings, then post the PR review, when every mission of a run has ended.
 // Import this module for its side effect in every route that calls advanceRun, so the hook is
 // set in whichever server bundle finishes the run:
 //
@@ -7,10 +7,17 @@
 // postReview locks on runs.review_posted_at, so two callers cannot post two reviews. An error is
 // logged and swallowed: a failed post must not move the run to failed or keep it in reporting.
 
+import { buildFindings } from "@pinepoint/ai";
 import { setRunCompleteHook } from "@pinepoint/runner";
 import { postReview } from "@pinepoint/github/review";
 
 setRunCompleteHook(async (runId) => {
+  // VI-12 first: the review reads the findings rows.
+  try {
+    await buildFindings(runId);
+  } catch (err) {
+    console.error(`[findings] could not build the findings for run ${runId}: ${(err as Error).message}`);
+  }
   try {
     const result = await postReview(runId);
     if (result.posted) {

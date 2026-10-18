@@ -221,7 +221,8 @@ export async function getPrContext(url: string, gh: Octokit = octokit()): Promis
     diff,
     changedFiles,
     previewUrl,
-    productionUrl: process.env.DEMO_PRODUCTION_URL ?? null,
+    // An empty value counts as unset. The production run (and the old_bug level) needs a real URL.
+    productionUrl: process.env.DEMO_PRODUCTION_URL || null,
     qaMd: qaBuf ? qaBuf.toString("utf8") : null,
   };
 }
