@@ -58,6 +58,20 @@ pnpm --filter ai test:planner -- --diff path/to/file.diff                      #
 
 Until issue 07 reads the live diff, `--pr` loads `packages/ai/fixtures/<owner>-<repo>-pr-<number>.diff`. Both commands read `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
 
+## Findings
+
+`buildFindings(runId)` in `@pinepoint/ai` turns the mission results of a finished run into findings (plan section 8.2). A failed check that fails again on the flake re-run is a `bug`; when production fails the same check it is an `old_bug`; notes without a failed check give a `possible` issue. Failures with the same check name and target path form one finding. The title, the steps, expected and saw are rewritten in STE with `PLANNER_MODEL`, then linted in TypeScript (no semicolons, at most 8 words per step, at most 20 words per sentence). On a lint failure the rewrite runs one more time, then the text is kept. The status route calls `buildFindings` and then `postReview` when the last mission ends.
+
+```sh
+pnpm --filter ai test                                          # unit tests with a fake model, no network
+pnpm --filter ai test:findings -- --run RUN_ID                 # build (or show) the findings of a finished run
+pnpm --filter ai test:findings -- --run RUN_ID --planted       # the acceptance check on a planted-PR run: one coupon Bug
+pnpm --filter ai test:findings -- --run RUN_ID --clean         # the false alarm check on a clean-PR run: zero Bugs
+pnpm --filter ai test:findings -- --run RUN_ID --force         # rebuild findings that are not posted yet
+```
+
+The script also checks that every screenshot URL answers a `HEAD` request with `200` and `image/png`. It reads `DATABASE_URL`, `ANTHROPIC_API_KEY` and `PLANNER_MODEL` from `.env.local`.
+
 ## Deploy
 
 Vercel builds every pushed branch as a preview and `main` as production. The project settings are Root Directory `apps/web` and framework Next.js. `engines` in `package.json` pins Node.js 22.x.
