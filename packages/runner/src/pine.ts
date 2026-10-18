@@ -234,3 +234,87 @@ export async function uploadScreenshot(missionId: string, bytes: Uint8Array): Pr
   });
   return blob.url;
 }
+
+/** One picture of the screen after an agent step, stored in Vercel Blob. Saved in missions.result.steps. */
+export interface StepShot {
+  url: string;
+  /** The step's title from Pine, for example "Click Add to cart". Empty when the frame has no step. */
+  title: string;
+  /** ISO time of the picture, or null. */
+  at: string | null;
+}
+
+/** At most this many step pictures are kept for one mission. The last picture is always kept. */
+export const MAX_STEP_SHOTS = 12;
+/** Event pages read for one turn at most. Each page holds up to EVENTS_PAGE_LIMIT events. */
+const MAX_EVENT_PAGES = 20;
+const EVENTS_PAGE_LIMIT = 100;
+
+function extFor(mediaType: string): string {
+  if (mediaType.includes("jpeg") || mediaType.includes("jpg")) return "jpg";
+  if (mediaType.includes("webp")) return "webp";
+  return "png";
+}
+
+/** Keeps `max` items spread over the list, with the first and the last always in. Exported for the tests. */
+export function sampleEvenly<T>(items: T[], max: number): T[] {
+  if (items.length <= max) return items;
+  if (max <= 1) return items.slice(-1);
+  const picked: T[] = [];
+  for (let i = 0; i < max; i += 1) {
+    picked.push(items[Math.round((i * (items.length - 1)) / (max - 1))]!);
+  }
+  return picked;
+}
+
+/**
+ * Reads the turn's `frame` events (Pine's picture of the screen after each step), uploads up to
+ * MAX_STEP_SHOTS of them to Vercel Blob and returns their public URLs in step order.
+ * Call it before the Computer is stopped. Returns [] when the session has no frames or a read fails.
+ */
+export async function collectStepShots(handle: PineHandle, missionId: string): Promise<StepShot[]> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return [];
+  const { session } = rebuild(handle);
+  const frames: Array<{ data: Uint8Array; mediaType: string; title: string; at: string | null }> = [];
+  try {
+    let after = 0;
+    for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+      const res = await session.agent.eventsPage({ after, limit: EVENTS_PAGE_LIMIT, frames: true });
+      for (const event of res.events) {
+        if (event.type !== "frame") continue;
+        if (handle.turnId && event.turnId && event.turnId !== handle.turnId) continue;
+        const frame = event.frame();
+        if (!frame || frame.data.byteLength === 0) continue;
+        frames.push({
+          data: frame.data,
+          mediaType: frame.mediaType || "image/png",
+          title: frame.activity?.title ?? "",
+          at: (frame.observedAt ?? event.ts)?.toISOString() ?? null,
+        });
+      }
+      if (res.nextAfter <= after || res.nextAfter >= res.latestEventId) break;
+      after = res.nextAfter;
+    }
+  } catch (err) {
+    console.warn(`[runner] could not read frames for mission ${missionId}: ${(err as Error).message}`);
+  }
+
+  const picked = sampleEvenly(frames, MAX_STEP_SHOTS);
+  const uploaded = await Promise.all(
+    picked.map(async (f, i) => {
+      try {
+        const name = `missions/${missionId}/steps/${String(i + 1).padStart(2, "0")}.${extFor(f.mediaType)}`;
+        const blob = await put(name, Buffer.from(f.data), {
+          access: "public",
+          contentType: f.mediaType,
+          allowOverwrite: true,
+        });
+        return { url: blob.url, title: f.title, at: f.at } satisfies StepShot;
+      } catch (err) {
+        console.warn(`[runner] step picture upload failed for mission ${missionId}: ${(err as Error).message}`);
+        return null;
+      }
+    }),
+  );
+  return uploaded.filter((s): s is StepShot => s !== null);
+}

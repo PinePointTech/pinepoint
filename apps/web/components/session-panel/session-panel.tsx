@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Check, ExternalLink, Hand, Maximize2, Minimize2, MonitorOff, Wrench, X } from "lucide-react";
 import { FAKE_COUPON_FIX, FAKE_FIX_COMMENT_URL } from "@/lib/fake-status";
-import type { Decision, DesktopStatus, FindingView, Fix, SessionPanelProps, StoredFix } from "./types";
+import type { Decision, DesktopStatus, FindingView, Fix, SessionPanelProps, StepShotView, StoredFix } from "./types";
 
 // The desktop SDK uses browser APIs. Load it only in the browser.
 const LiveDesktop = dynamic(() => import("./live-desktop"), {
@@ -65,6 +65,7 @@ export function SessionPanel({
   missionId,
   finding,
   lastScreenshotUrl,
+  steps = [],
   onClose,
   fake = false,
 }: SessionPanelProps) {
@@ -301,6 +302,8 @@ export function SessionPanel({
           />
         )}
       </FullScreenFrame>
+
+      {steps.length > 0 && <StepShots steps={steps} />}
 
       {live && (
         <div className="flex flex-col gap-1">
@@ -611,6 +614,42 @@ function FullScreenFrame({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Pine's picture of the screen after each step. Each one links to the full image in Vercel Blob.
+function StepShots({ steps }: { steps: StepShotView[] }) {
+  return (
+    <section aria-labelledby="step-shots-title" className="flex flex-col gap-2">
+      <h3 id="step-shots-title" className="text-sm font-semibold">
+        Screens at each step
+      </h3>
+      <ol className="grid grid-cols-2 gap-3 @md:grid-cols-3">
+        {steps.map((step, i) => (
+          <li key={step.url} className="min-w-0">
+            <a
+              href={step.url}
+              target="_blank"
+              rel="noreferrer"
+              className={`group flex flex-col gap-1.5 rounded-2xl ${FOCUS}`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={step.url}
+                alt=""
+                loading="lazy"
+                className="aspect-video w-full rounded-xl border border-border bg-surface-2 object-cover object-top transition-[filter] group-hover:brightness-95"
+              />
+              <span className="text-xs text-muted group-hover:text-fg">
+                <span className="font-medium text-fg">Step {i + 1}</span>
+                {step.title ? `. ${step.title}` : ""}
+                <span className="sr-only"> (opens the full picture in a new tab)</span>
+              </span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 

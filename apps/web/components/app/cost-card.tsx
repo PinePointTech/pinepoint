@@ -4,15 +4,16 @@ import { useMemo } from "react";
 import type { Mission, Run } from "@/lib/app-types";
 import {
   costAt,
-  ESTIMATE_PARTS,
+  MEASURED_PER_MISSION,
   MODEL_PRICES,
   PRICE_SOURCES,
   PRICES_AS_OF,
+  totalTokens,
   usageFromMissions,
   type ModelPrice,
 } from "@/lib/model-prices";
 
-const RUN_LABEL = "This run (Pine + Claude)";
+const RUN_LABEL = "This run on Pine";
 
 // Bars: this run in the brand green, every model in a soft warm gray.
 // The gray is below 3:1 on the surface by design (de-emphasis), so every
@@ -34,13 +35,22 @@ function toNumber(v: number | string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const usdSmall = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
+});
+
 function formatUsd(v: number): string {
-  if (v > 0 && v < 0.01) return "<$0.01";
-  return usd.format(v);
+  if (v > 0 && v < 0.001) return "<$0.001";
+  // Runs cost cents, so show a third decimal below one dollar.
+  return v > 0 && v < 1 ? usdSmall.format(v) : usd.format(v);
 }
 
+// $4, $0.10, $0.125, $12.50: at least two decimals, a third only when the price has one.
 function formatPrice(v: number): string {
-  return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(2)}`;
+  return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(3).replace(/0$/, "")}`;
 }
 
 type Row = {
@@ -48,17 +58,19 @@ type Row = {
   label: string;
   value: number;
   isRun: boolean;
+  estimate?: boolean;
   price?: ModelPrice;
 };
 
 export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
   const usage = useMemo(() => usageFromMissions(missions), [missions]);
-  const actual = toNumber(run.cost_usd);
+  // runs.cost_usd wins when the runner writes it. Else the sum of what Pine charged for each mission.
+  const actual = toNumber(run.cost_usd) ?? usage.pineCost;
   const actualValue = actual ?? 0;
 
   const rows = useMemo<Row[]>(() => {
     const all: Row[] = [
-      { key: "run", label: RUN_LABEL, value: actualValue, isRun: true },
+      { key: "run", label: RUN_LABEL, value: actualValue, isRun: true, estimate: usage.estimate },
       ...MODEL_PRICES.map((price) => ({
         key: price.modelId,
         label: price.model,
@@ -87,22 +99,29 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
       </p>
       <p className="mt-1 text-sm text-muted">
         {actual === null
-          ? "No cost is recorded yet."
-          : "This includes Pine usage and Anthropic usage."}
+          ? "Pine did not price these turns."
+          : usage.estimate
+            ? "Estimated from what Pine charged on real missions."
+            : `What Pine charged for the agent's model use on ${usage.missions} ${usage.missions === 1 ? "mission" : "missions"}. Pine does not price the Computer time yet.`}
       </p>
 
-      <dl className="mt-5 grid grid-cols-3 gap-3">
-        <TokenFigure label="Input tokens" value={usage.input} />
-        <TokenFigure label="Output tokens" value={usage.output} />
-        <TokenFigure label="Total" value={usage.input + usage.output} />
+      <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <TokenFigure label="Cache reads" value={usage.cacheRead} />
+        <TokenFigure label="Cache writes" value={usage.cacheWrite} />
+        <TokenFigure label="Other input" value={usage.input} />
+        <TokenFigure label="Output" value={usage.output} />
       </dl>
+      <p className="mt-2 text-xs text-muted">
+        {int.format(totalTokens(usage))} tokens in total. Pine reports them for each mission.
+        The planner call to Claude is not in these numbers.
+      </p>
 
       {usage.estimate && (
         <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
           <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-semibold text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/40 dark:text-amber-200">
             Estimate
           </span>
-          <span>No usage is recorded yet. The numbers are an estimate for one PR run.</span>
+          <span>No mission has reported usage yet.</span>
         </div>
       )}
 
@@ -111,23 +130,22 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
           <summary className="w-fit cursor-pointer rounded-xl py-1 underline decoration-border underline-offset-2 hover:text-fg">
             How we estimate
           </summary>
-          <ul className="mt-1 space-y-0.5 rounded-2xl bg-surface-2/60 px-3 py-2">
-            {ESTIMATE_PARTS.map((p) => (
-              <li key={p.part} className="flex flex-wrap justify-between gap-x-3">
-                <span>{p.part}</span>
-                <span className="tabular-nums">
-                  {int.format(p.input)} in / {int.format(p.output)} out
-                </span>
-              </li>
-            ))}
-          </ul>
+          <p className="mt-1 rounded-2xl bg-surface-2/60 px-3 py-2 leading-relaxed">
+            We measured {MEASURED_PER_MISSION.sample} real missions. One mission used{" "}
+            {int.format(MEASURED_PER_MISSION.cacheRead)} cache reads,{" "}
+            {int.format(MEASURED_PER_MISSION.cacheWrite)} cache writes,{" "}
+            {int.format(MEASURED_PER_MISSION.input)} other input tokens and{" "}
+            {int.format(MEASURED_PER_MISSION.output)} output tokens on average, and Pine
+            charged {usdSmall.format(MEASURED_PER_MISSION.pineCost)}. The estimate is that
+            average times 10 missions.
+          </p>
         </details>
       )}
 
       <div className="mt-6 border-t border-border pt-5">
         <h3 className="text-sm font-semibold">The same tokens at list prices</h3>
         <p className="mt-0.5 text-xs text-muted">
-          Each bar shows the cost of these input and output tokens on one model.
+          Each bar shows the cost of these tokens on one model, with its cache rates.
         </p>
 
         <div className="@container mt-4">
@@ -142,8 +160,9 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
             <table>
               <caption>
                 Cost of this run and of the same tokens at list prices, cheapest
-                first. Input: {int.format(usage.input)} tokens. Output:{" "}
-                {int.format(usage.output)} tokens.
+                first. Cache reads: {int.format(usage.cacheRead)} tokens. Cache
+                writes: {int.format(usage.cacheWrite)} tokens. Other input:{" "}
+                {int.format(usage.input)} tokens. Output: {int.format(usage.output)} tokens.
                 {usage.estimate ? " The token numbers are an estimate." : ""}
               </caption>
               <thead>
@@ -151,6 +170,7 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
                   <th scope="col">Model</th>
                   <th scope="col">Tier</th>
                   <th scope="col">Input price per 1M tokens</th>
+                  <th scope="col">Cache hit price per 1M tokens</th>
                   <th scope="col">Output price per 1M tokens</th>
                   <th scope="col">Cost</th>
                 </tr>
@@ -161,8 +181,9 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
                     <th scope="row">
                       {row.price ? `${row.price.provider} ${row.label}` : row.label}
                     </th>
-                    <td>{row.price ? row.price.tier : "Actual cost"}</td>
+                    <td>{row.price ? row.price.tier : usage.estimate ? "Estimate" : "Actual cost"}</td>
                     <td>{row.price ? formatPrice(row.price.inputPerMTok) : "Not applicable"}</td>
+                    <td>{row.price ? formatPrice(row.price.cacheReadPerMTok) : "Not applicable"}</td>
                     <td>{row.price ? formatPrice(row.price.outputPerMTok) : "Not applicable"}</td>
                     <td>{formatUsd(row.value)}</td>
                   </tr>
@@ -174,7 +195,8 @@ export function CostCard({ run, missions }: { run: Run; missions: Mission[] }) {
 
         <div className="mt-5 space-y-1 text-xs leading-relaxed text-muted">
           <p>
-            List prices per 1M tokens, standard tier, as of {PRICES_AS_OF}.
+            List prices per 1M tokens, standard tier, as of {PRICES_AS_OF}. Cache
+            writes and cache hits use each provider&apos;s cache rates.
             Sources:{" "}
             {PRICE_SOURCES.map((s, i) => (
               <span key={s.provider}>
@@ -229,12 +251,12 @@ function BarRow({ row, max }: { row: Row; max: number }) {
               {row.price.tier}
             </span>
             <span className="text-[11px] text-muted tabular-nums @lg:basis-full">
-              {formatPrice(row.price.inputPerMTok)} in / {formatPrice(row.price.outputPerMTok)} out
+              {formatPrice(row.price.inputPerMTok)} in / {formatPrice(row.price.cacheReadPerMTok)} cached / {formatPrice(row.price.outputPerMTok)} out
             </span>
           </>
         ) : (
           <span className="rounded-full border border-accent/30 bg-accent-soft px-1.5 text-[11px] leading-4 text-fg">
-            actual
+            {row.estimate ? "estimate" : "actual"}
           </span>
         )}
       </div>

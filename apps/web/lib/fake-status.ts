@@ -95,6 +95,38 @@ function iso(baseMs: number, seconds: number): string {
   return new Date(baseMs + seconds * 1000).toISOString();
 }
 
+// Real Pine usage of the 10 preview missions of run 68934cf1 (PR #10, 17 Oct 2026):
+// [input, cache read, cache write, output, Pine cost in USD]. The sample run shows real numbers.
+const SAMPLE_USAGE: Array<[number, number, number, number, number]> = [
+  [24, 139787, 22159, 1788, 0.012583068],
+  [18, 82172, 18303, 1497, 0.009623028],
+  [30, 156252, 19495, 2182, 0.012747828],
+  [27, 135878, 19136, 2090, 0.012017952],
+  [18, 82675, 18566, 1411, 0.00959016],
+  [27, 160431, 22257, 1569, 0.012793284],
+  [33, 188840, 22267, 2963, 0.0154869],
+  [15, 75819, 21713, 1686, 0.010764996],
+  [27, 165210, 23113, 2535, 0.01455582],
+  [27, 137161, 19163, 2200, 0.012215244],
+];
+
+function sampleUsage(i: number) {
+  const [input, cacheRead, cacheWrite, output, cost] = SAMPLE_USAGE[i % SAMPLE_USAGE.length]!;
+  return {
+    llm: { inputTokens: input, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens: output, totalTokens: input + cacheRead + cacheWrite + output },
+    cost: { currency: "USD", total: cost, llm: cost, compute: null },
+  };
+}
+
+// The step pictures the runner saves in missions.result.steps.
+function sampleSteps(i: number) {
+  const steps = [{ url: "/demo/store-home.png", title: "Open the store", at: null }];
+  if (i === BUG_INDEX) {
+    steps.push({ url: "/demo/coupon-bug.png", title: "Apply SAVE10 a second time", at: null });
+  }
+  return steps;
+}
+
 function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
   const missions: Mission[] = PLANS.map((p, i) => {
     let status: MissionStatus = "queued";
@@ -114,14 +146,14 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
       new_feature: i === BUG_INDEX,
       url: PREVIEW_URL,
       status,
-      result: null,
+      result: t >= endAt(i) ? { steps: sampleSteps(i) } : null,
       screenshot_url:
         t >= endAt(i) && i === BUG_INDEX
           ? "/demo/coupon-bug.png"
           : t >= startAt(i)
             ? "/demo/store-home.png"
             : null,
-      usage: null,
+      usage: t >= endAt(i) ? sampleUsage(i) : null,
       started_at: t >= startAt(i) ? iso(baseMs, startAt(i)) : null,
       finished_at: t >= endAt(i) ? iso(baseMs, endAt(i)) : null,
     };
@@ -199,7 +231,7 @@ function buildStatus(runId: string, t: number, baseMs: number): StatusResponse {
     status,
     review_id: null,
     review_posted_at: null,
-    cost_usd: Math.round(ended * 0.042 * 100) / 100,
+    cost_usd: null,
     started_at: iso(baseMs, 0),
     finished_at: status === "done" ? iso(baseMs, DONE_AT) : null,
   };

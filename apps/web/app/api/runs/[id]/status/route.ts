@@ -1,17 +1,11 @@
 // GET /api/runs/[id]/status: advance the run by one short step and return its state (plan section 4.5).
 // The dashboard polls this every 3 seconds. Each call waits at most 1 second on each running turn.
-//
-// When the last mission ends, the runner moves the run to `reporting` one time and calls the hook
-// below: build the findings (VI-12), then post the PR review (VI-13). Then the run is `done`.
+// When the last mission ends, lib/run-hooks.ts builds the findings (VI-12) and posts the review (VI-13).
+// A run that the GitHub webhook started also drives itself (lib/drive.ts). advanceRun is safe to
+// call from both at the same time: every state change is a conditional update.
 
-import { buildFindings } from "@pinepoint/ai";
-import { postReview } from "@pinepoint/github/review";
-import { advanceRun, setRunCompleteHook } from "@pinepoint/runner";
-
-setRunCompleteHook(async (runId) => {
-  await buildFindings(runId);
-  await postReview(runId);
-});
+import { advanceRun } from "@pinepoint/runner";
+import "@/lib/run-hooks";
 
 export const dynamic = "force-dynamic";
 /** The completion call runs about 10 STE rewrites and posts the review. Well above the measured poll time. */
