@@ -65,6 +65,9 @@ test("buildSteRewritePrompt has the rules and the draft", () => {
   assert.match(prompt, /4\. Do not use semicolons\./);
   assert.match(prompt, /## Draft to rewrite/);
   assert.match(prompt, /SAVE10 applies two times/);
+  assert.doesNotMatch(prompt, /## qa\.md/);
+  const withQa = buildSteRewritePrompt(good, "# Demo store QA notes\nA page reload empties the cart.");
+  assert.match(withQa, /## qa\.md\n# Demo store QA notes/);
 });
 
 test("parseSteReply strips code fences and defaults null fields", () => {

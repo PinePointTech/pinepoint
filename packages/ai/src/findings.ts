@@ -254,7 +254,7 @@ async function insertFinding(runId: string, built: BuiltFinding): Promise<Findin
  * Throws when a mission still runs, so the caller must wait for every end state first.
  */
 export async function buildFindings(runId: string, options: BuildFindingsOptions = {}): Promise<BuildFindingsResult> {
-  const { missions } = await loadRunMissions(runId);
+  const { run, missions } = await loadRunMissions(runId);
   const open = missions.filter((m) => m.status === "queued" || m.status === "running");
   if (open.length > 0) {
     throw new Error(`Run ${runId} has ${open.length} mission(s) still open. Build the findings after every mission ends.`);
@@ -274,7 +274,9 @@ export async function buildFindings(runId: string, options: BuildFindingsOptions
   const drafts = groupFindings(missions);
   const rewritten: BuiltFinding[] = await Promise.all(
     drafts.map(async (draft) => {
-      const result = await rewriteSte(draft.text, { model: options.model, complete: options.complete });
+      // qa.md goes only with a notes-only draft, where the model judges whether the note is a problem.
+      const qaMd = draft.checkNames.length === 0 ? run.qa_md : null;
+      const result = await rewriteSte(draft.text, { model: options.model, complete: options.complete, qaMd });
       usage.inputTokens += result.usage.inputTokens;
       usage.outputTokens += result.usage.outputTokens;
       return { draft, text: result.text, attempts: result.attempts, lintErrors: result.lintErrors };

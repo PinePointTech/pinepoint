@@ -55,8 +55,12 @@ export const STE_OUTPUT_EXAMPLE: SteText = {
 
 const MAX_TOKENS = 2048;
 
-/** Builds the user prompt for one rewrite. Exported for the tests and for prompt reviews. */
-export function buildSteRewritePrompt(draft: SteText): string {
+/**
+ * Builds the user prompt for one rewrite. Exported for the tests and for prompt reviews.
+ * `qaMd` is the store's qa.md. With it, the model can mark a note as no problem when qa.md
+ * describes that behavior as expected (for example "A page reload empties the cart").
+ */
+export function buildSteRewritePrompt(draft: SteText, qaMd?: string | null): string {
   return [
     "## Rules",
     ...STE_RULES.map((rule, i) => `${i + 1}. ${rule}`),
@@ -65,9 +69,11 @@ export function buildSteRewritePrompt(draft: SteText): string {
     "One JSON object with: title (string, one short sentence, no final period), steps (array of strings, one action each), " +
       "expected (string or null), saw (string or null), problem (boolean). Keep expected and saw null when the draft has null. " +
       "When the draft lists two checks, write expected and saw as one sentence per check. " +
-      "Set problem to false only when the draft reports no problem at all, for example a note that says the feature worked as expected.",
+      "Set problem to false only when the draft reports no problem at all: a note that says the feature worked as expected, " +
+      "or a note about behavior that qa.md describes as expected.",
     "Example:",
     JSON.stringify(STE_OUTPUT_EXAMPLE, null, 2),
+    ...(qaMd?.trim() ? ["", "## qa.md", qaMd.trim()] : []),
     "",
     "## Draft to rewrite",
     JSON.stringify(draft, null, 2),
@@ -154,6 +160,8 @@ export interface RewriteSteOptions {
   model?: string;
   /** Overrides the Anthropic call. Tests use this. */
   complete?: Complete;
+  /** The store's qa.md, for the `problem` judgment. */
+  qaMd?: string | null;
 }
 
 export interface RewriteSteResult {
@@ -173,7 +181,7 @@ export interface RewriteSteResult {
 export async function rewriteSte(draft: SteText, options: RewriteSteOptions = {}): Promise<RewriteSteResult> {
   const model = options.model ?? plannerModel();
   const complete = options.complete ?? completeWithAnthropic;
-  const prompt = buildSteRewritePrompt(draft);
+  const prompt = buildSteRewritePrompt(draft, options.qaMd);
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
   let kept: SteText = draft;
