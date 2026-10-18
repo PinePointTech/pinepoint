@@ -45,7 +45,7 @@ const RUN_STATUS_LABEL: Record<Run["status"], string> = {
 };
 
 // The session panel takes the finding in its own shape.
-function toFindingView(f: Finding | undefined): FindingView | null {
+function toFindingView(f: Finding | undefined, prUrl: string): FindingView | null {
   if (!f || !f.level) return null;
   return {
     id: f.id,
@@ -56,8 +56,13 @@ function toFindingView(f: Finding | undefined): FindingView | null {
     saw: f.saw ?? "",
     production_saw: f.production_saw,
     screenshot_url: f.screenshot_url,
+    path: f.path,
+    line: f.line,
     decision: f.decision,
     decided_at: f.decided_at,
+    fix: f.fix ?? null,
+    // A review comment opens at {pr_url}#discussion_r{id}. 0 is the lock value while a post runs.
+    fix_comment_url: f.fix_comment_id ? `${prUrl}#discussion_r${f.fix_comment_id}` : null,
   };
 }
 
@@ -511,7 +516,7 @@ export function Dashboard() {
             key={panelMissionId}
             runId={status.run.id}
             missionId={panelMissionId}
-            finding={toFindingView(panelFinding)}
+            finding={toFindingView(panelFinding, status.run.pr_url)}
             lastScreenshotUrl={panelMission?.screenshot_url ?? null}
             steps={stepsOf(panelMission?.result)}
             onClose={closePanel}

@@ -52,15 +52,21 @@ export type Complete = (request: {
   system: string;
   prompt: string;
   maxTokens: number;
+  /** Public image URLs that go before the prompt text. The fix agent sends the failure screenshot. */
+  images?: Array<{ url: string }>;
 }) => Promise<{ text: string; usage: TokenUsage }>;
 
 /** Calls the Messages API once and returns the text of the reply. */
-export const completeWithAnthropic: Complete = async ({ model, system, prompt, maxTokens }) => {
+export const completeWithAnthropic: Complete = async ({ model, system, prompt, maxTokens, images = [] }) => {
+  const content: Anthropic.ContentBlockParam[] = [
+    ...images.map((image): Anthropic.ImageBlockParam => ({ type: "image", source: { type: "url", url: image.url } })),
+    { type: "text", text: prompt },
+  ];
   const message = await anthropic().messages.create({
     model,
     max_tokens: maxTokens,
     system,
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content }],
   });
   const text = message.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")

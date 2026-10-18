@@ -175,6 +175,37 @@ async function listChangedFiles(
   }
 }
 
+/** A file at a SHA. `content` is omitted for a missing, binary or over-budget file. */
+export interface RepoFile {
+  path: string;
+  content?: string;
+}
+
+/**
+ * Reads text files at a SHA, in order, within `budget` bytes in total. A file that does not
+ * exist, is binary, or does not fit in what is left of the budget gets no content.
+ */
+export async function readFilesWithinBudget(
+  gh: Octokit,
+  ref: { owner: string; repo: string },
+  paths: string[],
+  sha: string,
+  budget: number = MAX_CONTENT_BYTES,
+): Promise<RepoFile[]> {
+  const files: RepoFile[] = [];
+  let left = budget;
+  for (const path of paths) {
+    const buf = await readFileAt(gh, ref, path, sha);
+    if (!buf || buf.includes(0) || buf.length > left) {
+      files.push({ path });
+      continue;
+    }
+    left -= buf.length;
+    files.push({ path, content: buf.toString("utf8") });
+  }
+  return files;
+}
+
 /** Fills `content` for added or modified text files, within MAX_CONTENT_BYTES in total. */
 async function fillContent(
   gh: Octokit,
@@ -182,14 +213,23 @@ async function fillContent(
   files: PrChangedFile[],
   sha: string,
 ): Promise<void> {
-  let budget = MAX_CONTENT_BYTES;
-  for (const file of files) {
-    if (file.status === "removed") continue;
-    const buf = await readFileAt(gh, ref, file.path, sha);
-    if (!buf || buf.includes(0) || buf.length > budget) continue;
-    budget -= buf.length;
-    file.content = buf.toString("utf8");
-  }
+  const kept = files.filter((f) => f.status !== "removed");
+  const read = await readFilesWithinBudget(gh, ref, kept.map((f) => f.path), sha);
+  kept.forEach((file, i) => {
+    const content = read[i]?.content;
+    if (content !== undefined) file.content = content;
+  });
+}
+
+/** The unified diff of a PR (Accept: application/vnd.github.v3.diff). */
+export async function getPrDiff(gh: Octokit, ref: { owner: string; repo: string; number: number }): Promise<string> {
+  const res = await gh.pulls.get({
+    owner: ref.owner,
+    repo: ref.repo,
+    pull_number: ref.number,
+    mediaType: { format: "diff" },
+  });
+  return res.data as unknown as string;
 }
 
 /** Reads all that the planner and the runner need from a PR. */
@@ -200,8 +240,7 @@ export async function getPrContext(url: string, gh: Octokit = octokit()): Promis
   const { data: pr } = await gh.pulls.get({ owner, repo, pull_number: number });
   const headSha = pr.head.sha;
 
-  const diffRes = await gh.pulls.get({ owner, repo, pull_number: number, mediaType: { format: "diff" } });
-  const diff = diffRes.data as unknown as string;
+  const diff = await getPrDiff(gh, ref);
 
   const [changedFiles, previewUrl, qaBuf] = await Promise.all([
     listChangedFiles(gh, ref),

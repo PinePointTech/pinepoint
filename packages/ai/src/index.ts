@@ -1,7 +1,15 @@
 // @pinepoint/ai: Anthropic calls for the planner, the STE rewrite, the STE lint and the fix.
 
 export { anthropic, anthropicApiKey, plannerModel, fixModel, type Complete, type TokenUsage } from "./client";
-export { rightSideLines, isRightSideLine, changedPaths, annotateDiff, type RightSideLines } from "./diff";
+export {
+  rightSideLines,
+  rightSideHunkLines,
+  isRightSideLine,
+  isInsideHunk,
+  changedPaths,
+  annotateDiff,
+  type RightSideLines,
+} from "./diff";
 export {
   planMissions,
   buildPlannerPrompt,
@@ -42,3 +50,27 @@ export {
   type BuildFindingsOptions,
   type BuildFindingsResult,
 } from "./findings";
+export {
+  proposeFix,
+  fixFinding,
+  buildFixPrompt,
+  parseFixReply,
+  validateFix,
+  readStoredFix,
+  loadFindingWithRun,
+  loadMissionErrors,
+  FixError,
+  FixSchema,
+  NoFixSchema,
+  FIX_CONFIDENCES,
+  FIX_RULES,
+  FIX_SYSTEM,
+  type Fix,
+  type FixConfidence,
+  type StoredFix,
+  type FixInput,
+  type ProposeFixOptions,
+  type ProposeFixResult,
+  type FixFindingOptions,
+  type FixFindingResult,
+} from "./fix";

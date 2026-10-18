@@ -60,6 +60,25 @@ export interface Mission {
   finished_at: string | null;
 }
 
+// One fix from the fix agent (plan section 8.3). The same shape as FixSchema in @pinepoint/ai.
+export interface Fix {
+  path: string;
+  startLine: number;
+  endLine: number;
+  replacement: string;
+  explanation: string;
+  confidence: "high" | "medium" | "low";
+}
+
+// What findings.fix stores. `fix` is null when the agent gave a reason instead.
+export interface StoredFix {
+  fix: Fix | null;
+  reason: string | null;
+  model: string;
+  attempts: number;
+  createdAt: string;
+}
+
 export interface Finding {
   id: string;
   run_id: string;
@@ -76,7 +95,7 @@ export interface Finding {
   comment_id: number | null;
   decision: "bug" | "not_bug" | null;
   decided_at: string | null;
-  fix: unknown;
+  fix: StoredFix | null;
   fix_comment_id: number | null;
   rerun_status: string | null;
 }

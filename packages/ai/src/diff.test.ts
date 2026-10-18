@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { annotateDiff, changedPaths, isRightSideLine, rightSideLines } from "./diff";
+import { annotateDiff, changedPaths, isInsideHunk, isRightSideLine, rightSideHunkLines, rightSideLines } from "./diff";
 
 const planted = readFileSync(join(import.meta.dirname, "../fixtures/vihuynh72-pinepoint-pr-6.diff"), "utf8");
 
@@ -24,6 +24,28 @@ test("isRightSideLine rejects removed lines, context lines and unknown paths", (
   assert.equal(isRightSideLine(lines, "apps/demo-store/lib/cart.ts", 36), false, "a context line");
   assert.equal(isRightSideLine(lines, "apps/demo-store/lib/cart.ts", 31), false, "the old line of the removed check");
   assert.equal(isRightSideLine(lines, "apps/demo-store/lib/products.ts", 1), false);
+});
+
+test("rightSideHunkLines includes the context lines of each hunk", () => {
+  const lines = rightSideHunkLines(planted);
+  // Hunk @@ -30,12 +32,9 @@ shows right-side lines 32 to 40. Hunk @@ -10,6 +10,8 @@ shows 10 to 17.
+  const cart = [...lines.get("apps/demo-store/lib/cart.ts")!].sort((a, b) => a - b);
+  assert.deepEqual(cart.filter((n) => n >= 32 && n <= 40), [32, 33, 34, 35, 36, 37, 38, 39, 40]);
+  assert.deepEqual(cart.filter((n) => n < 32), [10, 11, 12, 13, 14, 15, 16, 17]);
+  assert.equal(cart.includes(18), false, "line 18 is between two hunks");
+});
+
+test("isInsideHunk accepts a range inside one hunk and rejects the rest", () => {
+  const lines = rightSideHunkLines(planted);
+  const path = "apps/demo-store/lib/cart.ts";
+  assert.equal(isInsideHunk(lines, path, 35, 37), true, "the changed if and the two context lines after it");
+  assert.equal(isInsideHunk(lines, path, 36, 38), true, "context lines only");
+  assert.equal(isInsideHunk(lines, path, 35, 35), true, "one line");
+  assert.equal(isInsideHunk(lines, path, 30, 35), false, "starts before the hunk");
+  assert.equal(isInsideHunk(lines, path, 50, 52), false, "no hunk shows these lines");
+  assert.equal(isInsideHunk(lines, path, 17, 32), false, "crosses the gap between two hunks");
+  assert.equal(isInsideHunk(lines, path, 37, 35), false, "end before start");
+  assert.equal(isInsideHunk(lines, "apps/demo-store/lib/products.ts", 1, 1), false, "path not in the diff");
 });
 
 test("rightSideLines skips deleted files and handles new files", () => {
