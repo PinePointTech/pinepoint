@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     headSha: context.headSha,
     author: context.author || null,
     previewUrl,
-    productionUrl: context.productionUrl ?? process.env.DEMO_PRODUCTION_URL ?? null,
+    productionUrl: context.productionUrl || process.env.DEMO_PRODUCTION_URL || null,
     qaMd: context.qaMd ?? "",
   };
 

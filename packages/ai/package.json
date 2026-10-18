@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --env-file-if-exists=../../.env.local --import tsx --test \"src/**/*.test.ts\"",
-    "test:planner": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-planner.ts"
+    "test:planner": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-planner.ts",
+    "test:findings": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-findings.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
