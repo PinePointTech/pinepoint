@@ -136,6 +136,30 @@ button.link {
   margin: 8px 0 0;
 }
 
+.shipping {
+  border: none;
+  padding: 0;
+  margin: 16px 0 0;
+}
+
+.shipping legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+.shipping label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.shipping input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .totals {
   display: grid;
   grid-template-columns: 1fr auto;
