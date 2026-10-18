@@ -27,6 +27,7 @@ import {
   startMission,
   stopMission,
   uploadScreenshot,
+  collectStepShots,
 } from "./pine";
 
 /** The gap between two Computer creates, so one run does not trip the per-minute create limit (plan risk 5). */
@@ -305,13 +306,25 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
     await cancelMission(handle).catch((err: Error) => console.warn(`[runner] cancel failed: ${err.message}`));
   }
 
+  let failShotUrl: string | null = null;
   if (artifacts?.screenshot && decision.status !== "passed") {
     try {
-      const url = await uploadScreenshot(mission.id, artifacts.screenshot);
-      await sql()`update missions set screenshot_url = ${url} where id = ${mission.id}`;
+      failShotUrl = await uploadScreenshot(mission.id, artifacts.screenshot);
     } catch (err) {
       console.warn(`[runner] screenshot upload failed for mission ${mission.id}: ${(err as Error).message}`);
     }
+  }
+  // Pine's picture of the screen after each step. Read before the Computer stops.
+  const steps = await collectStepShots(handle, mission.id).catch(() => []);
+  const shotUrl = failShotUrl ?? steps.at(-1)?.url ?? null;
+  if (shotUrl || steps.length > 0) {
+    const stepsJson = JSON.stringify({ steps });
+    await sql()`
+      update missions
+      set screenshot_url = coalesce(${shotUrl}, screenshot_url),
+          result = coalesce(result, '{}'::jsonb) || ${stepsJson}::jsonb
+      where id = ${mission.id}
+    `;
   }
 
   if (decision.status === "failed") {

@@ -11,12 +11,16 @@ export {
   stopMission,
   collectArtifacts,
   uploadScreenshot,
+  collectStepShots,
+  sampleEvenly,
+  MAX_STEP_SHOTS,
   parseMissionResult,
   MISSION_BUDGET_MS,
   COMPUTER_IDLE_TIMEOUT_SECONDS,
   SESSION_NAME,
   type StartMissionInput,
   type MissionArtifacts,
+  type StepShot,
 } from "./pine";
 export {
   decideTurn,
