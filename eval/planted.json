@@ -9,5 +9,41 @@
   {
     "pr": 11,
     "bug": null
+  },
+  {
+    "pr": 29,
+    "bug": "Remove one leaves a line at quantity 0, then negative totals",
+    "lens": "Abuse",
+    "expected": "Your cart is empty. / $0.00",
+    "buggy": "Sage linen apron x -1 / $-20.00",
+    "path": "apps/demo-store/lib/cart.ts",
+    "line": 27
+  },
+  {
+    "pr": 31,
+    "bug": "Express shipping turns free at $20.00 or more",
+    "lens": "Flow",
+    "expected": "$36.00",
+    "buggy": "$24.00",
+    "path": "apps/demo-store/lib/cart.ts",
+    "line": 63
+  },
+  {
+    "pr": 33,
+    "bug": "SAVE10 and BUNDLE15 stack",
+    "lens": "Abuse",
+    "expected": "$44.10",
+    "buggy": "$37.49",
+    "path": "apps/demo-store/lib/cart.ts",
+    "line": 46
+  },
+  {
+    "pr": 34,
+    "bug": "Saved cart doubles the quantities on each reload",
+    "lens": "Flow",
+    "expected": "$24.00",
+    "buggy": "$48.00",
+    "path": "apps/demo-store/lib/cart.ts",
+    "line": 101
   }
 ]

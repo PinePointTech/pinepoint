@@ -18,13 +18,22 @@ import {
   type Run,
   type StatusResponse,
 } from "@/lib/app-types";
-import { SessionPanel, type FindingView } from "@/components/session-panel";
+import { SessionPanel, type FindingView, type StepShotView } from "@/components/session-panel";
 import { Activity } from "./activity";
 import { CostCard } from "./cost-card";
 import { MissionGroups } from "./mission-groups";
 import { findingFor, tileState } from "./tile-state";
 
 const POLL_MS = 3000;
+
+// missions.result.steps: the runner's pictures of the screen after each step.
+function stepsOf(result: unknown): StepShotView[] {
+  const steps = (result as { steps?: unknown } | null)?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter(
+    (s): s is StepShotView => !!s && typeof s === "object" && typeof (s as StepShotView).url === "string",
+  );
+}
 
 const RUN_STATUS_LABEL: Record<Run["status"], string> = {
   planning: "Planning",
@@ -504,6 +513,7 @@ export function Dashboard() {
             missionId={panelMissionId}
             finding={toFindingView(panelFinding)}
             lastScreenshotUrl={panelMission?.screenshot_url ?? null}
+            steps={stepsOf(panelMission?.result)}
             onClose={closePanel}
             fake={usingFake}
           />
