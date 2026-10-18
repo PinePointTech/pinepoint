@@ -106,10 +106,22 @@ button.link {
 
 .lines li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
   gap: 12px;
   padding: 6px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.stepper {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.stepper button {
+  min-width: 32px;
+  padding: 2px 8px;
+  line-height: 1.4;
 }
 
 .coupon label {
