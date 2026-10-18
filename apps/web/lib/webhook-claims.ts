@@ -37,12 +37,23 @@ function missingTable(err: unknown): boolean {
   return (err as { code?: string })?.code === "42P01";
 }
 
+/** The same statement as db/003_webhook_claims.sql. The first delivery creates the table, so no manual migration is needed. */
+async function createClaimsTable(): Promise<void> {
+  await sql()`
+    create table if not exists webhook_claims (
+      key text primary key,
+      run_id uuid references runs(id),
+      claimed_at timestamptz not null default now()
+    )
+  `;
+}
+
 /**
  * Takes the claim for this PR head. True when this call got it. An old claim is taken again when
  * its run failed or had no preview, or when it never got a run and is stale, and only while no
  * other live run exists for the same head.
  */
-export async function claim(t: ClaimTarget): Promise<boolean> {
+export async function claim(t: ClaimTarget, retried = false): Promise<boolean> {
   const key = claimKey(t);
   try {
     const rows = await sql()`
@@ -59,8 +70,9 @@ export async function claim(t: ClaimTarget): Promise<boolean> {
     `;
     return rows.length > 0;
   } catch (err) {
-    if (missingTable(err)) {
-      throw new Error("The webhook_claims table is missing. Run: pnpm --filter @pinepoint/core db:migrate");
+    if (missingTable(err) && !retried) {
+      await createClaimsTable();
+      return claim(t, true);
     }
     throw err;
   }

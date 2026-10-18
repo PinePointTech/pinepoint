@@ -74,12 +74,11 @@ Setup:
 
 1. Make a secret: `openssl rand -hex 32`.
 2. Vercel, project `pinepoint`, Settings, Environment Variables: add `GITHUB_WEBHOOK_SECRET` with that value. Check that `APP_BASE_URL` is `https://pinepoint-rho.vercel.app`. Optional: `PINEPOINT_WEBHOOK_PATHS`. Redeploy production.
-3. Apply the schema: `pnpm --filter @pinepoint/core db:migrate` (adds `webhook_claims`).
-4. GitHub, `vihuynh72/pinepoint`, Settings, Webhooks, Add webhook:
+3. GitHub, `vihuynh72/pinepoint`, Settings, Webhooks, Add webhook:
    - Payload URL: `https://pinepoint-rho.vercel.app/api/github/webhook`
    - Content type: `application/json`
    - Secret: the same value
    - Events: "Let me select individual events", then "Pull requests" and "Deployment statuses" only
-5. GitHub sends a ping. Recent Deliveries shows 200. `GET /api/health` shows `GITHUB_WEBHOOK_SECRET: true`.
+4. GitHub sends a ping. Recent Deliveries shows 200. `GET /api/health` shows `GITHUB_WEBHOOK_SECRET: true`.
 
-Each delivery's response body says what happened (`skipped`, `waiting` or `starting`). Redeliver from Recent Deliveries to try again.
+The first delivery that claims a commit creates the `webhook_claims` table (`db/003_webhook_claims.sql`) when it is missing, so no manual migration is needed. Each delivery's response body says what happened (`skipped`, `waiting` or `starting`). Redeliver from Recent Deliveries to try again.
