@@ -8,6 +8,7 @@ import type {
   Run,
   RunsResponse,
   StatusResponse,
+  StoredFix,
 } from "./app-types";
 
 export const FAKE_RUN_ID = "00000000-0000-4000-8000-000000000010";
@@ -43,6 +44,30 @@ const PLANS: Plan[] = [
 
 const BUG_INDEX = 2;
 const POSSIBLE_INDEX = 4;
+
+// The fix the panel shows after Bug in fake mode (demo script, shot 8).
+export const FAKE_COUPON_FIX: StoredFix = {
+  fix: {
+    path: "apps/demo-store/lib/cart.ts",
+    startLine: 35,
+    endLine: 37,
+    replacement: [
+      "  if (!(code in PERCENT_COUPONS) && !SHIPPING_COUPONS.has(code)) {",
+      '    return { cart, message: "Coupon not valid." };',
+      "  }",
+      "  if (cart.coupons.includes(code)) {",
+      '    return { cart, message: "Coupon already applied." };',
+      "  }",
+    ].join("\n"),
+    explanation: "The change removed the check for an applied coupon. The fix puts the check back. SAVE10 applies one time again.",
+    confidence: "high",
+  },
+  reason: null,
+  model: "claude-opus-5-5",
+  attempts: 1,
+  createdAt: "2026-10-17T23:40:00.000Z",
+};
+export const FAKE_FIX_COMMENT_URL = `${PR_URL}#discussion_r2440000000`;
 
 function missionId(i: number): string {
   return `00000000-0000-4000-8000-0000000001${String(i).padStart(2, "0")}`;

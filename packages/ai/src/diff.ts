@@ -12,6 +12,18 @@ const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
  * that appear as `+` lines. Deleted files have no right side and are left out.
  */
 export function rightSideLines(diff: string): RightSideLines {
+  return collectRightSide(diff, false);
+}
+
+/**
+ * Like `rightSideLines`, but also includes the context lines inside each hunk.
+ * A GitHub suggestion may replace any right-side line that a hunk shows (plan section 8.3, rule 2).
+ */
+export function rightSideHunkLines(diff: string): RightSideLines {
+  return collectRightSide(diff, true);
+}
+
+function collectRightSide(diff: string, includeContext: boolean): RightSideLines {
   const result: RightSideLines = new Map();
   let path: string | null = null;
   let newLine = 0;
@@ -44,26 +56,46 @@ export function rightSideLines(diff: string): RightSideLines {
       continue;
     }
     if (line.startsWith("+")) {
-      let lines = result.get(path);
-      if (!lines) {
-        lines = new Set();
-        result.set(path, lines);
-      }
-      lines.add(newLine);
+      add(result, path, newLine);
       newLine += 1;
     } else if (line.startsWith("-") || line.startsWith("\\")) {
       // A removed line or "\ No newline at end of file": no right-side line.
     } else {
       // Context line (starts with a space, or is empty in some diffs).
+      if (includeContext) add(result, path, newLine);
       newLine += 1;
     }
   }
   return result;
 }
 
+function add(result: RightSideLines, path: string, line: number): void {
+  let lines = result.get(path);
+  if (!lines) {
+    lines = new Set();
+    result.set(path, lines);
+  }
+  lines.add(line);
+}
+
 /** True when `line` of `path` is an added or changed line on the right side of the diff. */
 export function isRightSideLine(lines: RightSideLines, path: string, line: number): boolean {
   return lines.get(path)?.has(line) ?? false;
+}
+
+/**
+ * True when every line from `start` to `end` of `path` is a right-side line that a hunk shows.
+ * Use it with `rightSideHunkLines`. A range that leaves a hunk, or crosses the gap between two
+ * hunks, has a line that no hunk shows, so it fails.
+ */
+export function isInsideHunk(lines: RightSideLines, path: string, start: number, end: number): boolean {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return false;
+  const set = lines.get(path);
+  if (!set) return false;
+  for (let n = start; n <= end; n += 1) {
+    if (!set.has(n)) return false;
+  }
+  return true;
 }
 
 /** The paths that have a right side in the diff, in diff order. */

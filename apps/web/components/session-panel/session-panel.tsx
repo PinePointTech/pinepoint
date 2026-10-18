@@ -2,8 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Check, Hand, Maximize2, Minimize2, MonitorOff, Wrench, X } from "lucide-react";
-import type { Decision, DesktopStatus, FindingView, SessionPanelProps } from "./types";
+import { Bot, Check, ExternalLink, Hand, Maximize2, Minimize2, MonitorOff, Wrench, X } from "lucide-react";
+import { FAKE_COUPON_FIX, FAKE_FIX_COMMENT_URL } from "@/lib/fake-status";
+import type { Decision, DesktopStatus, FindingView, Fix, SessionPanelProps, StoredFix } from "./types";
 
 // The desktop SDK uses browser APIs. Load it only in the browser.
 const LiveDesktop = dynamic(() => import("./live-desktop"), {
@@ -82,6 +83,87 @@ export function SessionPanel({
     setDecidedAt(finding?.decided_at ?? null);
     setDecisionError(null);
   }, [finding?.id, finding?.decision, finding?.decided_at]);
+
+  // The fix (plan 9.3): after Bug, the panel asks the fix agent, shows the fix, then Post to PR.
+  const [fix, setFix] = useState<StoredFix | null>(finding?.fix ?? null);
+  const [fixBusy, setFixBusy] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const [postBusy, setPostBusy] = useState(false);
+  const [postUrl, setPostUrl] = useState<string | null>(finding?.fix_comment_url ?? null);
+  const [postError, setPostError] = useState<string | null>(null);
+  // The finding id that the panel asked a fix for. It stops a second request for the same finding.
+  const fixAsked = useRef<string | null>(null);
+
+  useEffect(() => {
+    setFix(finding?.fix ?? null);
+    setFixError(null);
+    setPostUrl(finding?.fix_comment_url ?? null);
+    setPostError(null);
+    fixAsked.current = null;
+  }, [finding?.id]);
+
+  // The status poll brings the stored fix and the posted comment after a reload or from another tab.
+  useEffect(() => {
+    if (finding?.fix && !fix) setFix(finding.fix);
+  }, [finding?.fix, fix]);
+  useEffect(() => {
+    if (finding?.fix_comment_url && !postUrl) setPostUrl(finding.fix_comment_url);
+  }, [finding?.fix_comment_url, postUrl]);
+
+  const requestFix = useCallback(
+    async (force = false) => {
+      if (!finding) return;
+      setFixBusy(true);
+      setFixError(null);
+      try {
+        if (fake) {
+          await wait(1500);
+          setFix(FAKE_COUPON_FIX);
+        } else {
+          const reply = (await postJson(`/api/findings/${encodeURIComponent(finding.id)}/fix`, { force })) as {
+            fix?: StoredFix | null;
+          };
+          if (!reply?.fix) throw new Error("no fix");
+          setFix(reply.fix);
+        }
+      } catch {
+        setFixError("The fix did not come. Try again.");
+      } finally {
+        setFixBusy(false);
+      }
+    },
+    [finding, fake],
+  );
+
+  // Ask for the fix one time, after Bug, for a Bug finding that has none yet.
+  useEffect(() => {
+    if (!finding || finding.level !== "bug" || decision !== "bug" || fix || fixBusy) return;
+    if (fixAsked.current === finding.id) return;
+    fixAsked.current = finding.id;
+    void requestFix();
+  }, [finding, decision, fix, fixBusy, requestFix]);
+
+  async function postFix() {
+    if (!finding || !fix?.fix || postUrl) return;
+    setPostBusy(true);
+    setPostError(null);
+    try {
+      if (fake) {
+        await wait(600);
+        setPostUrl(FAKE_FIX_COMMENT_URL);
+      } else {
+        const reply = (await postJson(`/api/findings/${encodeURIComponent(finding.id)}/post-fix`, {})) as {
+          url?: unknown;
+        };
+        if (typeof reply?.url !== "string") throw new Error("no url");
+        setPostUrl(reply.url);
+      }
+    } catch {
+      setPostError("The post did not work. Try again.");
+    } finally {
+      setPostBusy(false);
+    }
+  }
 
   // A new mission asks for its own desktop.
   useEffect(() => {
@@ -336,12 +418,76 @@ export function SessionPanel({
           </div>
 
           {decision === "bug" && (
-            <div className="rounded-2xl border border-dashed border-border bg-surface p-4">
-              <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-4">
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
                 <Wrench className="h-4 w-4 text-muted" aria-hidden />
                 Fix
               </h3>
-              <p className="text-sm text-muted">The fix shows here.</p>
+              <div role="status" aria-live="polite" className="flex flex-col gap-3">
+                {finding.level === "old_bug" ? (
+                  <p className="text-sm text-muted">Production has this bug too. PinePoint proposes no fix.</p>
+                ) : fixBusy ? (
+                  <p className="text-sm text-muted">Claude writes the fix. This takes up to one minute.</p>
+                ) : fix?.fix ? (
+                  <FixCard stored={fix} fix={fix.fix} />
+                ) : fix ? (
+                  <>
+                    <p className="text-sm">No fix inside the diff.</p>
+                    {fix.reason && <p className="text-sm text-muted">{fix.reason}</p>}
+                  </>
+                ) : !fixError ? (
+                  <p className="text-sm text-muted">The fix shows here.</p>
+                ) : null}
+              </div>
+              {fixError && (
+                <div className="flex flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
+                  <p className="text-sm text-danger" role="alert">
+                    {fixError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => requestFix(true)}
+                    className={`min-h-11 rounded-full border border-border bg-surface px-4 text-sm font-semibold text-fg transition-colors hover:bg-surface-2 ${FOCUS}`}
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+              {fix?.fix && finding.level === "bug" && (
+                <div className="flex flex-col gap-2">
+                  {postUrl ? (
+                    <p className="flex items-center gap-2 rounded-2xl bg-accent-soft px-4 py-3 text-sm font-medium text-fg" role="status">
+                      <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+                      <span>
+                        Posted.{" "}
+                        <a
+                          href={postUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`inline-flex items-center gap-1 underline underline-offset-2 hover:text-accent ${FOCUS}`}
+                        >
+                          Open the suggestion
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                        </a>
+                      </span>
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={postBusy}
+                      onClick={postFix}
+                      className={`min-h-12 w-full rounded-full bg-accent px-5 text-base font-semibold text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-accent ${FOCUS}`}
+                    >
+                      {postBusy ? "Wait..." : "Post to PR"}
+                    </button>
+                  )}
+                  {postError && (
+                    <p className="px-1 text-sm text-danger" role="alert">
+                      {postError}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -351,6 +497,26 @@ export function SessionPanel({
         </p>
       )}
     </section>
+  );
+}
+
+// The fix: the file and the line range, the replacement, the explanation and the confidence.
+function FixCard({ stored, fix: f }: { stored: StoredFix; fix: Fix }) {
+  const range = f.startLine === f.endLine ? `line ${f.startLine}` : `lines ${f.startLine}-${f.endLine}`;
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <code className="rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-xs break-all">{f.path}</code>
+        <span className="text-muted">{range}</span>
+      </p>
+      <pre className="max-h-72 overflow-auto rounded-xl bg-surface-2 p-3 font-mono text-xs leading-relaxed">
+        <code>{f.replacement}</code>
+      </pre>
+      <p className="text-sm break-words">{f.explanation}</p>
+      <p className="text-xs text-muted">
+        Confidence: {f.confidence}. Model: {stored.model}.
+      </p>
+    </div>
   );
 }
 

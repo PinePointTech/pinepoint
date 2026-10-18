@@ -12,11 +12,13 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --env-file-if-exists=../../.env.local --import tsx --test \"src/**/*.test.ts\"",
     "test:planner": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-planner.ts",
-    "test:findings": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-findings.ts"
+    "test:findings": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-findings.ts",
+    "test:fix": "node --env-file-if-exists=../../.env.local --import tsx scripts/test-fix.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
     "@pinepoint/core": "workspace:*",
+    "@pinepoint/github": "workspace:*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

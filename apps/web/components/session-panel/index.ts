@@ -1,2 +1,2 @@
 export { SessionPanel } from "./session-panel";
-export type { Decision, FindingLevel, FindingView, SessionPanelProps } from "./types";
+export type { Decision, FindingLevel, FindingView, Fix, SessionPanelProps, StoredFix } from "./types";
