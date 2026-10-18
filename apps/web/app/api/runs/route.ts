@@ -2,12 +2,11 @@
 // GET /api/runs: the last 10 runs for the history list.
 //
 // The POST returns as soon as the first Computers start. GET /api/runs/[id]/status drives the rest.
+// The work itself is startRunForPr in lib/start-run.ts, which the GitHub webhook also calls.
 
 import { z } from "zod";
-import { planMissions } from "@pinepoint/ai";
-import { getPrContext } from "@pinepoint/github/context";
-import { postNoPreviewComment } from "@pinepoint/github/no-preview";
-import { createNoPreviewRun, createRun, listRecentRuns, startRun } from "@pinepoint/runner";
+import { listRecentRuns } from "@pinepoint/runner";
+import { PrReadError, startRunForPr } from "@/lib/start-run";
 
 export const dynamic = "force-dynamic";
 /** The planner and the first Computer starts take time. The Hobby plan allows 300 seconds at most (plan 4.2). */
@@ -32,42 +31,23 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send { prUrl } as JSON.", detail: (err as Error).message }, { status: 400 });
   }
 
-  let context;
+  let outcome;
   try {
-    context = await getPrContext(body.prUrl);
+    outcome = await startRunForPr({ prUrl: body.prUrl, previewUrl: body.previewUrl, noPreview: "record" });
   } catch (err) {
-    return Response.json({ error: `Could not read the PR: ${(err as Error).message}` }, { status: 400 });
-  }
-  const previewUrl = body.previewUrl ?? context.previewUrl;
-
-  const base = {
-    prUrl: context.url,
-    owner: context.owner,
-    repo: context.repo,
-    prNumber: context.number,
-    headSha: context.headSha,
-    author: context.author || null,
-    previewUrl,
-    productionUrl: context.productionUrl ?? process.env.DEMO_PRODUCTION_URL ?? null,
-    qaMd: context.qaMd ?? "",
-  };
-
-  if (!previewUrl) {
-    const runId = await createNoPreviewRun(base);
-    try {
-      await postNoPreviewComment({ owner: context.owner, repo: context.repo, number: context.number });
-    } catch (err) {
-      console.warn(`[runs] no-preview comment failed: ${(err as Error).message}`);
+    if (err instanceof PrReadError) {
+      return Response.json({ error: err.message }, { status: 400 });
     }
-    return Response.json({ runId, status: "no_preview" });
+    throw err;
   }
 
-  const plan = await planMissions({
-    diff: context.diff,
-    qaMd: base.qaMd,
-    changedFiles: context.changedFiles.map((f) => (f.content === undefined ? { path: f.path } : { path: f.path, content: f.content })),
-  });
-  const runId = await createRun(base, plan.missions);
-  const started = await startRun(runId);
-  return Response.json({ runId, status: "running", missions: plan.missions.length, started });
+  switch (outcome.status) {
+    case "no_preview":
+      return Response.json({ runId: outcome.runId, status: "no_preview" });
+    case "running":
+      return Response.json({ runId: outcome.runId, status: "running", missions: outcome.missions, started: outcome.started });
+    default:
+      // Only the webhook asks for these outcomes.
+      throw new Error(`Unexpected start outcome: ${outcome.status}`);
+  }
 }

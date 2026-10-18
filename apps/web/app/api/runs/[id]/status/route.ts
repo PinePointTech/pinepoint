@@ -1,7 +1,10 @@
 // GET /api/runs/[id]/status: advance the run by one short step and return its state (plan section 4.5).
 // The dashboard polls this every 3 seconds. Each call waits at most 1 second on each running turn.
+// A run that the GitHub webhook started also drives itself (lib/drive.ts). advanceRun is safe to
+// call from both at the same time: every state change is a conditional update.
 
 import { advanceRun } from "@pinepoint/runner";
+import "@/lib/run-hooks";
 
 export const dynamic = "force-dynamic";
 /** Well above the measured time. A call that polls 20 missions ends in a few seconds. */

@@ -15,6 +15,8 @@ const ENV_KEYS = [
   "APP_BASE_URL",
   "DEMO_PRODUCTION_URL",
   "VERCEL_DEMO_PROJECT_NAME",
+  "GITHUB_WEBHOOK_SECRET",
+  "PINEPOINT_WEBHOOK_PATHS",
 ] as const;
 
 export function GET() {

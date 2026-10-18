@@ -61,3 +61,24 @@ Until issue 07 reads the live diff, `--pr` loads `packages/ai/fixtures/<owner>-<
 ## Deploy
 
 Vercel builds every pushed branch as a preview and `main` as production. The project settings are Root Directory `apps/web` and framework Next.js. `engines` in `package.json` pins Node.js 22.x.
+
+## GitHub webhook
+
+When a PR that changes `apps/demo-store/` is opened or updated, PinePoint starts a run by itself and posts its review on the PR. Nobody needs to press Run in `/app`.
+
+`POST /api/github/webhook` checks `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET`. It takes `pull_request` (opened, reopened, synchronize, ready_for_review; drafts too) and `deployment_status` (success, a demo store preview, not Production). The preview is usually not ready at `pull_request` time, so the `deployment_status` event is the one that starts most runs. A PR that changes no file under `PINEPOINT_WEBHOOK_PATHS` (default `apps/demo-store/`) is skipped. One run per PR head SHA: a second event for the same commit is skipped. With no preview yet, the webhook answers 202 and waits for the next event; it does not post "No preview. No test.".
+
+The run drives itself in `after()`: about 240 seconds per function call, then a signed call to `POST /api/runs/[id]/drive` for the next slice, for at most 40 minutes from the run's start. When every mission has ended, the review posts on the PR (the same happens for runs started from `/app`).
+
+Setup:
+
+1. Make a secret: `openssl rand -hex 32`.
+2. Vercel, project `pinepoint`, Settings, Environment Variables: add `GITHUB_WEBHOOK_SECRET` with that value. Check that `APP_BASE_URL` is `https://pinepoint-rho.vercel.app`. Optional: `PINEPOINT_WEBHOOK_PATHS`. Redeploy production.
+3. GitHub, `vihuynh72/pinepoint`, Settings, Webhooks, Add webhook:
+   - Payload URL: `https://pinepoint-rho.vercel.app/api/github/webhook`
+   - Content type: `application/json`
+   - Secret: the same value
+   - Events: "Let me select individual events", then "Pull requests" and "Deployment statuses" only
+4. GitHub sends a ping. Recent Deliveries shows 200. `GET /api/health` shows `GITHUB_WEBHOOK_SECRET: true`.
+
+The first delivery that claims a commit creates the `webhook_claims` table (`db/003_webhook_claims.sql`) when it is missing, so no manual migration is needed. Each delivery's response body says what happened (`skipped`, `waiting` or `starting`). Redeliver from Recent Deliveries to try again.
