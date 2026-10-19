@@ -16,20 +16,39 @@ export const ensureStartLeaseColumn = alterOnce(
   () => sql()`alter table runs add column if not exists start_lease_until timestamptz`,
 );
 
-/** Takes the start lease of the run for `seconds`. True when this call got it, false when another call holds it. */
-export async function takeStartLease(runId: string, seconds = START_LEASE_SECONDS): Promise<boolean> {
-  const rows = await withAddedColumn(
+/** The lease column is missing and cannot be added, so starts go on without a lease, as before db/006. */
+export class LeaseUnavailableError extends Error {
+  override name = "LeaseUnavailableError";
+}
+
+/**
+ * Takes the start lease of the run for `seconds`. Returns the lease's expiry as Postgres text (it keeps
+ * the microseconds, so dropStartLease can match it exactly), or null when another call holds the lease.
+ * Throws LeaseUnavailableError when the column is missing and cannot be added.
+ */
+export async function takeStartLease(runId: string, seconds = START_LEASE_SECONDS): Promise<string | null> {
+  const ensure = async () => {
+    try {
+      await ensureStartLeaseColumn();
+    } catch (err) {
+      throw new LeaseUnavailableError((err as Error).message);
+    }
+  };
+  const rows = (await withAddedColumn(
     () => sql()`
       update runs set start_lease_until = now() + make_interval(secs => ${seconds})
       where id = ${runId} and (start_lease_until is null or start_lease_until < now())
-      returning id
+      returning start_lease_until::text as until
     `,
-    ensureStartLeaseColumn,
-  );
-  return rows.length > 0;
+    ensure,
+  )) as Array<{ until: string }>;
+  return rows[0]?.until ?? null;
 }
 
-/** Gives the lease back, so the next caller does not wait for it to expire. */
-export async function dropStartLease(runId: string): Promise<void> {
-  await sql()`update runs set start_lease_until = null where id = ${runId}`;
+/**
+ * Gives the lease back, so the next caller does not wait for it to expire. Only while it is still this
+ * call's lease: a call that ran past the lease must not clear the lease of the call that took it next.
+ */
+export async function dropStartLease(runId: string, until: string): Promise<void> {
+  await sql()`update runs set start_lease_until = null where id = ${runId} and start_lease_until::text = ${until}`;
 }

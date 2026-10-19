@@ -2,6 +2,7 @@
 // Server code only.
 
 import { sql } from "./db";
+import { alterOnce } from "./run-error";
 
 export interface ShotInput {
   missionId: string;
@@ -35,12 +36,12 @@ function missingTable(err: unknown): boolean {
   return (err as { code?: string })?.code === "42P01";
 }
 
-/** The same statements as db/004_mission_shots.sql, so the first save needs no manual migration. */
+/** The same statements as db/004_mission_shots.sql (with the cascade from db/007), so the first save needs no manual migration. */
 async function createShotsTable(): Promise<void> {
   await sql()`
     create table if not exists mission_shots (
       id uuid primary key default gen_random_uuid(),
-      mission_id uuid not null references missions(id),
+      mission_id uuid not null references missions(id) on delete cascade,
       idx int not null default 0,
       media_type text not null,
       title text not null default '',
@@ -51,6 +52,24 @@ async function createShotsTable(): Promise<void> {
   `;
   await sql()`create index if not exists mission_shots_mission_idx on mission_shots (mission_id, idx)`;
 }
+
+/** Postgres "if not exists" is not safe under concurrency: a caller that loses the race gets one of these. */
+function lostCreateRace(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return code === "23505" || code === "42P07";
+}
+
+/**
+ * Creates the table once per process. The runner saves up to 12 pictures at once, so on a database
+ * without the table many saves ask for it at the same moment; the ones that lose the race carry on.
+ */
+const ensureShotsTable = alterOnce(async () => {
+  try {
+    await createShotsTable();
+  } catch (err) {
+    if (!lostCreateRace(err)) throw err;
+  }
+});
 
 /** Saves one picture and returns its path (shotPath). */
 export async function saveShot(input: ShotInput, retried = false): Promise<string> {
@@ -64,7 +83,7 @@ export async function saveShot(input: ShotInput, retried = false): Promise<strin
     return shotPath(rows[0]!.id);
   } catch (err) {
     if (missingTable(err) && !retried) {
-      await createShotsTable();
+      await ensureShotsTable();
       return saveShot(input, true);
     }
     throw err;
@@ -105,6 +124,32 @@ export async function loadShot(id: string): Promise<StoredShot | null> {
     return row ? { mediaType: row.media_type, data: Buffer.from(row.data_b64, "base64") } : null;
   } catch (err) {
     if (missingTable(err)) return null;
+    throw err;
+  }
+}
+
+/** Step pictures are kept this many days. The picture a finding or a mission links to is kept for good. */
+export const SHOT_RETENTION_DAYS = 14;
+
+/**
+ * Deletes step pictures of runs that ended more than `days` ago, except the ones a finding (and so a
+ * PR review comment) or a mission card links to. Keeps mission_shots from filling the Neon quota.
+ * Returns how many rows went. 0 when the table does not exist yet.
+ */
+export async function pruneShots(days = SHOT_RETENTION_DAYS): Promise<number> {
+  try {
+    const rows = (await sql()`
+      delete from mission_shots s
+      using missions m, runs r
+      where s.mission_id = m.id and m.run_id = r.id
+        and r.finished_at < now() - make_interval(days => ${days})
+        and coalesce(m.screenshot_url, '') <> '/api/shots/' || s.id::text
+        and not exists (select 1 from findings f where f.screenshot_url = '/api/shots/' || s.id::text)
+      returning s.id
+    `) as Array<{ id: string }>;
+    return rows.length;
+  } catch (err) {
+    if (missingTable(err)) return 0;
     throw err;
   }
 }

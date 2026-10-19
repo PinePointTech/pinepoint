@@ -49,7 +49,7 @@ import {
   uploadScreenshot,
   collectStepShots,
 } from "./pine";
-import { dropStartLease, takeStartLease } from "./start-lease";
+import { dropStartLease, LeaseUnavailableError, takeStartLease } from "./start-lease";
 import { runStartPool, type StartOutcome } from "./start-pool";
 
 /** The gap between two Computer creates, so one run does not trip the per-minute create limit (plan risk 5). */
@@ -219,14 +219,21 @@ async function fillSlots(run: RunRow): Promise<number> {
   if (run.next_start_at && new Date(run.next_start_at).getTime() > Date.now()) {
     return 0;
   }
-  let lease: boolean | null;
+  // A string: this call holds the lease until that time. null: another call holds it.
+  // undefined: the lease column cannot exist on this database, so go on without a lease.
+  let lease: string | null | undefined;
   try {
     lease = await takeStartLease(run.id);
   } catch (err) {
-    console.warn(`[runner] could not take the start lease of run ${run.id}: ${(err as Error).message}`);
-    lease = null;
+    if (!(err instanceof LeaseUnavailableError)) {
+      // A passing database error: start nothing in this call. The next poll tries again.
+      console.warn(`[runner] could not take the start lease of run ${run.id}: ${(err as Error).message}`);
+      return 0;
+    }
+    console.warn(`[runner] no start lease column for run ${run.id}, starting without a lease: ${err.message}`);
+    lease = undefined;
   }
-  if (lease === false) return 0;
+  if (lease === null) return 0;
   try {
     const [limit, inUse] = await Promise.all([concurrencyLimit(), computersInUse()]);
     const n = slotsToFill(limit, inUse);
@@ -236,7 +243,7 @@ async function fillSlots(run: RunRow): Promise<number> {
     return await startClaimed(run, claimed);
   } finally {
     if (lease) {
-      await dropStartLease(run.id).catch((err: Error) =>
+      await dropStartLease(run.id, lease).catch((err: Error) =>
         console.warn(`[runner] could not drop the start lease of run ${run.id}: ${err.message}`),
       );
     }

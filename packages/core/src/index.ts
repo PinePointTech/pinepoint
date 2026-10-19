@@ -9,6 +9,8 @@ export {
   latestShotPaths,
   shotPath,
   shotIdFromPath,
+  pruneShots,
+  SHOT_RETENTION_DAYS,
   type ShotInput,
   type StoredShot,
 } from "./shots";

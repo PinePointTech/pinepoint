@@ -17,7 +17,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { listRecentRuns } from "@pinepoint/runner";
 import { DRIVE_SLICE_MS } from "@/lib/drive";
-import { PrReadError, planAndDrive, prepareRun, type PrepareOutcome } from "@/lib/start-run";
+import { CLAIM_BUSY_ERROR, PrReadError, planAndDrive, prepareRun, type PrepareOutcome } from "@/lib/start-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +54,10 @@ export async function POST(request: Request) {
       return Response.json({ error: err.message }, { status: 400 });
     }
     console.error(`[runs] could not start a run for ${body.prUrl}: ${(err as Error).message}`);
-    return Response.json({ error: `Could not start the run: ${(err as Error).message}` }, { status: 500 });
+    // The detail stays in the log: a database error can name the schema or even the connection string.
+    // Only the busy message is meant for the person.
+    const busy = (err as Error).message === CLAIM_BUSY_ERROR;
+    return Response.json({ error: `Could not start the run: ${busy ? CLAIM_BUSY_ERROR : "a server error. Try again."}` }, { status: 500 });
   }
 
   switch (outcome.status) {

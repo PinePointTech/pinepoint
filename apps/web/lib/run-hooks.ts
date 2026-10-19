@@ -7,11 +7,11 @@
 //
 // postReview locks on runs.review_posted_at, so two callers cannot post two reviews. An error is
 // logged and swallowed: a failed post or a failed stop must not move the run to failed or keep it in reporting.
-// The stops run in next/server after(), so the run moves to done without waiting for them.
+// The stops and the picture prune run in next/server after(), so the run moves to done without waiting for them.
 
 import { after } from "next/server";
 import { buildFindings } from "@pinepoint/ai";
-import type { FindingRow } from "@pinepoint/core";
+import { pruneShots, type FindingRow } from "@pinepoint/core";
 import { releaseUnneededKept, setRunCompleteHook } from "@pinepoint/runner";
 import { postReview } from "@pinepoint/github/review";
 
@@ -22,6 +22,26 @@ async function releaseKept(runId: string, findings: FindingRow[]): Promise<void>
     if (released > 0) console.log(`[runner] stopped ${released} kept Computer(s) of run ${runId}`);
   } catch (err) {
     console.error(`[runner] could not stop the kept Computers of run ${runId}: ${(err as Error).message}`);
+  }
+}
+
+/** Deletes old step pictures (pruneShots). Logs and never throws. */
+async function pruneOldShots(): Promise<void> {
+  try {
+    const n = await pruneShots();
+    if (n > 0) console.log(`[shots] deleted ${n} old step picture(s)`);
+  } catch (err) {
+    console.error(`[shots] could not prune old pictures: ${(err as Error).message}`);
+  }
+}
+
+/** Runs `task` after the response when inside a request, else without waiting. */
+function later(task: () => Promise<void>): void {
+  try {
+    after(task);
+  } catch {
+    // Not inside a request (a script): run it without waiting.
+    void task();
   }
 }
 
@@ -50,13 +70,10 @@ setRunCompleteHook(async (runId) => {
   // each Computer, so it runs after the response: the run must not stay in reporting for it.
   if (findings) {
     const found = findings;
-    try {
-      after(() => releaseKept(runId, found));
-    } catch {
-      // Not inside a request (a script): run it without waiting.
-      void releaseKept(runId, found);
-    }
+    later(() => releaseKept(runId, found));
   }
+  // Each finished run also clears step pictures older than SHOT_RETENTION_DAYS, so they do not fill Neon.
+  later(pruneOldShots);
 });
 
 export {};
