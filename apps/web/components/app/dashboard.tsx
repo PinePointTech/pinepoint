@@ -25,6 +25,7 @@ import { CostCard } from "./cost-card";
 import { MissionGroups } from "./mission-groups";
 import { Spinner, useNow } from "./progress";
 import {
+  detailLine,
   failedChecks,
   findingFor,
   flakePassed,
@@ -69,6 +70,11 @@ function noFindingNote(state: TileState, mission: Mission, missions: Mission[]):
       return flakePassed(mission, missions)
         ? "The re-check passed, so PinePoint does not report it."
         : "A check failed, but PinePoint does not report it.";
+    case "needs_you": {
+      // The person who takes control must see what the agent asked; on a phone the card is hidden.
+      const asks = detailLine("needs_you", mission, undefined, missions);
+      return asks ? `The agent needs help. Take control to help it. ${asks}` : null;
+    }
     default:
       return null;
   }
@@ -222,6 +228,8 @@ export function Dashboard() {
 
   useEffect(refreshRuns, [refreshRuns]);
 
+  // Bumped to poll the open run again after it ended, for example when the sample run restarts.
+  const [pollKey, setPollKey] = useState(0);
   // Poll the open run every 3 seconds until it ends.
   useEffect(() => {
     if (!runId) {
@@ -256,7 +264,7 @@ export function Dashboard() {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [runId, fakeParam, complete, refreshRuns]);
+  }, [runId, fakeParam, complete, refreshRuns, pollKey]);
 
   // The start card goes when the new run's status arrives, or when it cannot load.
   useEffect(() => {
@@ -286,6 +294,8 @@ export function Dashboard() {
       // The run already open keeps its drawer, its ?finding= and its view.
       if (same) {
         setQuery({ fake });
+        // A sample run restarts its clock on Run, and a finished run stopped its poll: poll again.
+        if (res.fake || (status && TERMINAL_RUN_STATUSES.includes(status.run.status))) setPollKey((k) => k + 1);
       } else {
         setMissionId(null);
         setQuery({ run: res.runId, finding: null, fake });

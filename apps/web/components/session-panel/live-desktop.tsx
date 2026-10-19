@@ -263,11 +263,16 @@ export default function LiveDesktop({ missionId, control, running, poster, onInp
     setPhase((p) => (p === "gone" || p === "stalled" ? p : wasLive.current ? "reconnecting" : "connecting"));
   }, []);
 
-  // After a live screen, the Computer is gone. Before it, the screen service can still be
-  // starting: ask for a new delegation in 3 seconds, until the 45 seconds are over.
+  // Running out of reconnects does not prove the Computer is gone: a laptop that wakes from sleep
+  // or a network switch fails all 5 in a few seconds. After a live screen, start the bounded ask
+  // loop again, so the desktop route decides (410 means gone). Before a live screen, the screen
+  // service can still be starting: ask for a new delegation in 3 seconds, until the 45 seconds are over.
   const handleExhausted = useCallback(() => {
     if (wasLive.current) {
-      setPhase("gone");
+      wasLive.current = false;
+      tryStart.current = Date.now();
+      connectStart.current = null;
+      setAttempt((n) => n + 1);
       return;
     }
     if (Date.now() - (connectStart.current ?? Date.now()) >= CONNECT_MS) {

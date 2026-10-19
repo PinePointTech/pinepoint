@@ -82,10 +82,12 @@ export function RunProgress({
   now: number;
 }) {
   const terminal = TERMINAL_RUN_STATUSES.includes(run.status);
+  // Once the run has ended, a user that waits for a person counts as done: the run will not wait for it.
+  const isDone = (m: Mission) => ended(m) || (terminal && m.status === "needs_you");
   const previews = missions.filter((m) => m.kind === "preview");
-  const previewsDone = previews.filter(ended).length;
-  const rechecking = missions.filter((m) => m.kind !== "preview" && !ended(m)).length;
-  const allDone = missions.filter(ended).length;
+  const previewsDone = previews.filter(isDone).length;
+  const rechecking = missions.filter((m) => m.kind !== "preview" && !isDone(m)).length;
+  const allDone = missions.filter(isDone).length;
   const indeterminate = run.status === "planning" || (!terminal && missions.length === 0);
 
   const count =
