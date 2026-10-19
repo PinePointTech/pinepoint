@@ -230,16 +230,21 @@ export function Dashboard() {
     }
     let stop = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The Last runs list shows each run's status, so refresh it when the open run moves on.
+    let lastStatus: string | null = null;
     const tick = async () => {
       try {
         const s = await getRunStatus(runId, { fake: fakeParam, complete });
         if (stop) return;
         setStatus(s);
         setError(null);
+        const moved = lastStatus !== null && lastStatus !== s.run.status;
+        lastStatus = s.run.status;
         if (TERMINAL_RUN_STATUSES.includes(s.run.status)) {
           refreshRuns();
           return;
         }
+        if (moved) refreshRuns();
       } catch (e) {
         if (stop) return;
         setError(`Cannot load the run: ${(e as Error).message}`);
