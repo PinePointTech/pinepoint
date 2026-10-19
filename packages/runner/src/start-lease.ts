@@ -24,14 +24,19 @@ export class LeaseUnavailableError extends Error {
 /**
  * Takes the start lease of the run for `seconds`. Returns the lease's expiry as Postgres text (it keeps
  * the microseconds, so dropStartLease can match it exactly), or null when another call holds the lease.
- * Throws LeaseUnavailableError when the column is missing and cannot be added.
+ * Throws LeaseUnavailableError when the column is missing and this database cannot add it.
  */
 export async function takeStartLease(runId: string, seconds = START_LEASE_SECONDS): Promise<string | null> {
   const ensure = async () => {
     try {
       await ensureStartLeaseColumn();
     } catch (err) {
-      throw new LeaseUnavailableError((err as Error).message);
+      // Only "this role or database cannot add the column" means no lease can ever exist here.
+      // Anything else (a dropped connection, a lock or statement timeout) is passing: rethrow it,
+      // so fillSlots starts nothing in this call and the next poll tries again.
+      const code = (err as { code?: string })?.code;
+      if (code === "42501" || code === "25006") throw new LeaseUnavailableError((err as Error).message);
+      throw err;
     }
   };
   const rows = (await withAddedColumn(
@@ -50,5 +55,7 @@ export async function takeStartLease(runId: string, seconds = START_LEASE_SECOND
  * call's lease: a call that ran past the lease must not clear the lease of the call that took it next.
  */
 export async function dropStartLease(runId: string, until: string): Promise<void> {
-  await sql()`update runs set start_lease_until = null where id = ${runId} and start_lease_until::text = ${until}`;
+  // Compare as timestamptz: exact (the text keeps the microseconds and the offset) and free of the
+  // request's TimeZone and DateStyle.
+  await sql()`update runs set start_lease_until = null where id = ${runId} and start_lease_until = ${until}::timestamptz`;
 }

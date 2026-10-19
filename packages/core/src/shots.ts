@@ -37,21 +37,19 @@ function missingTable(err: unknown): boolean {
 }
 
 /** The same statements as db/004_mission_shots.sql (with the cascade from db/007), so the first save needs no manual migration. */
-async function createShotsTable(): Promise<void> {
-  await sql()`
-    create table if not exists mission_shots (
-      id uuid primary key default gen_random_uuid(),
-      mission_id uuid not null references missions(id) on delete cascade,
-      idx int not null default 0,
-      media_type text not null,
-      title text not null default '',
-      observed_at timestamptz,
-      data_b64 text not null,
-      created_at timestamptz not null default now()
-    )
-  `;
-  await sql()`create index if not exists mission_shots_mission_idx on mission_shots (mission_id, idx)`;
-}
+const createShotsTable = () => sql()`
+  create table if not exists mission_shots (
+    id uuid primary key default gen_random_uuid(),
+    mission_id uuid not null references missions(id) on delete cascade,
+    idx int not null default 0,
+    media_type text not null,
+    title text not null default '',
+    observed_at timestamptz,
+    data_b64 text not null,
+    created_at timestamptz not null default now()
+  )
+`;
+const createShotsIndex = () => sql()`create index if not exists mission_shots_mission_idx on mission_shots (mission_id, idx)`;
 
 /** Postgres "if not exists" is not safe under concurrency: a caller that loses the race gets one of these. */
 function lostCreateRace(err: unknown): boolean {
@@ -60,14 +58,17 @@ function lostCreateRace(err: unknown): boolean {
 }
 
 /**
- * Creates the table once per process. The runner saves up to 12 pictures at once, so on a database
- * without the table many saves ask for it at the same moment; the ones that lose the race carry on.
+ * Creates the table and its index once per process. The runner saves up to 12 pictures at once, so on
+ * a database without the table many saves ask for it at the same moment; the ones that lose the race
+ * carry on. Each statement tolerates the race on its own, so a lost table race still makes the index.
  */
 const ensureShotsTable = alterOnce(async () => {
-  try {
-    await createShotsTable();
-  } catch (err) {
-    if (!lostCreateRace(err)) throw err;
+  for (const step of [createShotsTable, createShotsIndex]) {
+    try {
+      await step();
+    } catch (err) {
+      if (!lostCreateRace(err)) throw err;
+    }
   }
 });
 
