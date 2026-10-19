@@ -6,7 +6,8 @@ import { Loader2 } from "lucide-react";
 // The sliding bar of an indeterminate progress bar. React hoists the style tag into the head once.
 const SLIDE = "@keyframes pp-slide{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}";
 
-// A progress bar for work with no known end. Reduced motion shows a still, striped bar.
+// A progress bar for work with no known end. Reduced motion shows a still, striped bar. The
+// solid fill is for motion only: under the stripes it would make the bar look full.
 export function IndeterminateBar({ label, className = "" }: { label: string; className?: string }) {
   return (
     <div
@@ -20,7 +21,7 @@ export function IndeterminateBar({ label, className = "" }: { label: string; cla
       </style>
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 w-2/5 animate-[pp-slide_1.6s_ease-in-out_infinite] rounded-full bg-accent motion-reduce:w-full motion-reduce:animate-none motion-reduce:bg-[repeating-linear-gradient(135deg,var(--pp-accent)_0_6px,transparent_6px_12px)] motion-reduce:opacity-60"
+        className="absolute inset-y-0 left-0 w-2/5 animate-[pp-slide_1.6s_ease-in-out_infinite] rounded-full motion-safe:bg-accent motion-reduce:w-full motion-reduce:animate-none motion-reduce:bg-[repeating-linear-gradient(135deg,var(--pp-accent)_0_6px,transparent_6px_12px)] motion-reduce:opacity-60"
       />
     </div>
   );

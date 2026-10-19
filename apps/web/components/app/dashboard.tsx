@@ -116,11 +116,17 @@ interface Starting {
 
 function startingStage(s: Starting, now: number): string {
   if (s.runId) return s.existing ? "Opening the run that is already going." : "Opening the run.";
-  // POST /api/runs reads the PR and answers in a few seconds. An older server plans first.
+  // POST /api/runs reads the PR and answers in a few seconds. The page waits 30 seconds at most.
   return now - s.at < 8000
     ? "Reading the PR on GitHub."
-    : "Planning the missions with Claude. This can take a minute.";
+    : "The server is slow to answer. PinePoint waits up to 30 seconds.";
 }
+
+// The server's 500 text already starts with "Could not start the run". Do not say it two times.
+const startErrorText = (m: string) =>
+  /^(could not|cannot) start the run/i.test(m) ? m : `Cannot start the run: ${m}`;
+
+const PR_URL_HINT = "Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.";
 
 function Chip({ label, value, tone }: { label: string; value: string | number; tone: string }) {
   return (
@@ -163,8 +169,9 @@ export function Dashboard() {
 
   const [runs, setRuns] = useState<Run[]>([]);
   const [status, setStatus] = useState<WithFake<StatusResponse> | null>(null);
+  // A load failure (the run list or the status poll). The next good poll clears it.
   const [error, setError] = useState<string | null>(null);
-  // A note about the run start. The status poll does not clear it.
+  // A note about the run start, or another failure of a click. The status poll does not clear it.
   const [notice, setNotice] = useState<{ tone: "info" | "error"; text: string } | null>(null);
   const [prUrl, setPrUrl] = useState("");
   const [starting, setStarting] = useState<Starting | null>(null);
@@ -187,9 +194,16 @@ export function Dashboard() {
   const view = status && status.run.id === runId ? status : null;
   const usingFake = fakeParam || view?.fake === true;
 
+  // The newest query. startRun calls setQuery after an await, so it must not use the query
+  // of the render where Run was clicked.
+  const paramsRef = useRef(params);
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
+
   const setQuery = useCallback(
     (next: Record<string, string | null>) => {
-      const q = new URLSearchParams(params.toString());
+      const q = new URLSearchParams(paramsRef.current.toString());
       for (const [k, v] of Object.entries(next)) {
         if (v === null) q.delete(k);
         else q.set(k, v);
@@ -197,7 +211,7 @@ export function Dashboard() {
       const s = q.toString();
       router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
     },
-    [params, pathname, router],
+    [pathname, router],
   );
 
   const refreshRuns = useCallback(() => {
@@ -252,7 +266,7 @@ export function Dashboard() {
   async function startRun(url: string) {
     const match = PR_URL.exec(url);
     if (!match) {
-      setError("Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.");
+      setNotice({ tone: "error", text: PR_URL_HINT });
       return;
     }
     setStarting({ title: `${match[1]}/${match[2]} #${match[3]}`, at: Date.now(), runId: null, existing: false });
@@ -260,31 +274,35 @@ export function Dashboard() {
     setNotice(null);
     try {
       const res = await createRun(url, { fake: fakeParam });
+      // runId is the run in the URL when Run was clicked. The person cannot change it while
+      // the form waits, but they can open a mission card of that run.
       const same = res.runId === runId;
-      if (!same) setMissionId(null);
-      // The run already open keeps its drawer and its view.
-      setQuery({
-        run: res.runId,
-        finding: same ? findingParam : null,
-        fake: fakeParam || res.fake ? "1" : null,
-      });
+      const fake = fakeParam || res.fake ? "1" : null;
+      // The run already open keeps its drawer, its ?finding= and its view.
+      if (same) {
+        setQuery({ fake });
+      } else {
+        setMissionId(null);
+        setQuery({ run: res.runId, finding: null, fake });
+      }
       if (res.existing) {
         setNotice({ tone: "info", text: "A run for this commit is already going. You are watching it." });
       }
       setStarting((s) => (s ? { ...s, runId: res.runId, existing: res.existing } : s));
       refreshRuns();
     } catch (err) {
-      const message = (err as Error).message;
+      const text = startErrorText((err as Error).message);
       setStarting(null);
       if (err instanceof ApiError && err.runId) {
         // The run row exists. Open it, so its status shows what happened.
-        if (err.runId !== runId) setMissionId(null);
-        setQuery({ run: err.runId, finding: null });
-        setNotice({ tone: "error", text: `Cannot start the run: ${message}` });
-        refreshRuns();
-      } else {
-        setError(`Cannot start the run: ${message}`);
+        if (err.runId !== runId) {
+          setMissionId(null);
+          setQuery({ run: err.runId, finding: null });
+        }
       }
+      setNotice({ tone: "error", text });
+      // A slow server can still make the run. Then it shows in the list.
+      refreshRuns();
     }
   }
 
@@ -340,7 +358,7 @@ export function Dashboard() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError(`Copy did not work. The link is ${link}`);
+      setNotice({ tone: "error", text: `Copy did not work. The link is ${link}` });
     }
   }
 
@@ -397,19 +415,21 @@ export function Dashboard() {
           <label htmlFor="pr-url" className="sr-only">
             PR URL
           </label>
+          {/* readOnly and aria-disabled, not disabled: a disabled control drops the focus to the body. */}
           <input
             id="pr-url"
             type="url"
             value={prUrl}
             onChange={(e) => setPrUrl(e.target.value)}
-            disabled={starting !== null}
+            readOnly={starting !== null}
+            aria-disabled={starting !== null}
             placeholder="https://github.com/owner/repo/pull/1"
-            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30 disabled:opacity-60"
+            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30 aria-disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={starting !== null}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-60"
+            aria-disabled={starting !== null}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-accent"
           >
             {starting ? <Spinner className="size-4" /> : <Play className="size-4" strokeWidth={2} aria-hidden />}
             {starting ? "Starting" : "Run"}
@@ -438,6 +458,7 @@ export function Dashboard() {
             title={starting.title}
             stage={startingStage(starting, now)}
             seconds={Math.max(0, Math.floor((now - starting.at) / 1000))}
+            level={view ? 2 : 1}
           />
         )}
 

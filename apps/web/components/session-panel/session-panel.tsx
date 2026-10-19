@@ -15,10 +15,12 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { Spinner } from "@/components/app/progress";
 import type { MissionStatus } from "@/lib/app-types";
 import { FAKE_COUPON_FIX, FAKE_FIX_COMMENT_URL } from "@/lib/fake-status";
 import { ImageViewer, type ViewerItem } from "./image-viewer";
 import { LoadingScreen } from "./loading-screen";
+import { screenFor, type LastReason } from "./screen";
 import type {
   Decision,
   DesktopPhase,
@@ -30,47 +32,17 @@ import type {
   StoredFix,
 } from "./types";
 
+// The start of the wait for the desktop code. The loading card renders again on each poll, so
+// its clock counts from the first wait, not from the last render.
+let chunkWaitSince = 0;
+
 // The desktop SDK uses browser APIs. Load it only in the browser.
 const LiveDesktop = dynamic(() => import("./live-desktop"), {
   ssr: false,
-  loading: () => <LoadingScreen stage="Connecting to the screen" since={Date.now()} />,
+  loading: () => <LoadingScreen stage="Connecting to the screen" since={(chunkWaitSince ||= Date.now())} />,
 });
 
 const IDLE_MS = 15 * 60 * 1000;
-// A kept Computer stays on for one day (its idle timeout).
-const KEPT_MS = 24 * 60 * 60 * 1000;
-
-// Why the panel shows the last screen instead of a live desktop.
-type LastReason = "ended" | "gone" | "not_started" | "no_computer" | "sample";
-
-// What the screen area shows. Only "live" asks the desktop route for a Computer.
-type Screen = { kind: "queued" } | { kind: "starting" } | { kind: "live" } | { kind: "last"; reason: LastReason };
-
-function screenFor(
-  p: {
-    status?: MissionStatus;
-    kept?: boolean;
-    hasComputer?: boolean;
-    finishedAt?: string | null;
-    fake: boolean;
-  },
-  gone: boolean,
-  now: number,
-): Screen {
-  if (p.status === "queued") return { kind: "queued" };
-  if (p.status === "running" && p.hasComputer === false) return { kind: "starting" };
-  if (p.fake) return { kind: "last", reason: "sample" };
-  // A Computer that stopped when its user finished reads as the end of the mission.
-  if (gone) return { kind: "last", reason: p.finishedAt ? "ended" : "gone" };
-  if (p.hasComputer !== false) {
-    // No status: an older caller. Ask for the desktop, as before.
-    if (p.status === undefined || p.status === "running" || p.status === "needs_you") return { kind: "live" };
-    const end = p.finishedAt ? Date.parse(p.finishedAt) : NaN;
-    if (p.kept && (!Number.isFinite(end) || now - end < KEPT_MS)) return { kind: "live" };
-  }
-  if (p.hasComputer === false) return { kind: "last", reason: p.finishedAt ? "no_computer" : "not_started" };
-  return { kind: "last", reason: "ended" };
-}
 
 const LEVEL_TEXT: Record<FindingView["level"], string> = {
   bug: "Bug",
@@ -252,11 +224,18 @@ export function SessionPanel({
   // and no desktop request. An ended mission that keeps no Computer shows its last screen.
   const screen = screenFor({ status: missionStatus, kept, hasComputer, finishedAt, fake }, gone, Date.now());
   const live = screen.kind === "live" && phase === "live";
+  // A short drop keeps the control bar. The server keeps the control through a reconnect.
+  const reconnecting = screen.kind === "live" && phase === "reconnecting";
+  // The desktop is really gone: the Computer stopped, or the panel no longer shows it.
+  const desktopGone = screen.kind !== "live" || phase === "gone";
 
-  // Nobody can drive a desktop that is not live.
+  // Nobody can drive a desktop that is gone. Give the control back to the agent on the server
+  // too, else the agent stays paused.
   useEffect(() => {
-    if (!live) setControl("view");
-  }, [live]);
+    if (!desktopGone || control === "view") return;
+    void postJson(`/api/missions/${encodeURIComponent(missionId)}/control`, { action: "release" }).catch(() => {});
+    setControl("view");
+  }, [desktopGone, control, missionId]);
 
   // Control returns to the agent after 15 minutes without input.
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -377,7 +356,7 @@ export function SessionPanel({
         </button>
       </header>
 
-      <FullScreenFrame>
+      <FullScreenFrame viewerOpen={viewer !== null}>
         {screen.kind === "queued" ? (
           <LoadingScreen
             stage="Waiting for a free computer."
@@ -423,11 +402,16 @@ export function SessionPanel({
         onOpen={(i) => openViewer(steps, i, "Pictures of each step")}
       />
 
-      {live && (
+      {(live || reconnecting) && (
         <div className="flex flex-col gap-1">
           <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-3 @md:flex-row @md:items-center @md:justify-between @md:pl-4">
             <p className="flex items-center gap-2 text-sm" aria-live="polite">
-              {driving ? (
+              {reconnecting ? (
+                <>
+                  <Spinner className="size-4 text-muted" />
+                  {driving ? "You have control. The screen reconnects." : "The screen reconnects."}
+                </>
+              ) : driving ? (
                 <>
                   <Hand className="h-4 w-4 text-accent" aria-hidden />
                   You have control.
@@ -441,7 +425,7 @@ export function SessionPanel({
             </p>
             <button
               type="button"
-              disabled={controlBusy}
+              disabled={controlBusy || reconnecting}
               onClick={() => changeControl(driving ? "release" : "take")}
               className={`min-h-12 w-full rounded-full px-5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 @md:w-auto ${FOCUS} ${
                 driving
@@ -704,8 +688,9 @@ function FixCard({ stored, fix: f }: { stored: StoredFix; fix: Fix }) {
 
 // Wraps the desktop or the last screen with a Full screen button. It uses the
 // Fullscreen API, and falls back to a fixed full-window layer where the API is
-// missing (for example iPhone Safari). Esc leaves full screen.
-function FullScreenFrame({ children }: { children: React.ReactNode }) {
+// missing (for example iPhone Safari). Esc leaves full screen. While the picture
+// viewer is open over the layer, Esc is for the viewer.
+function FullScreenFrame({ children, viewerOpen }: { children: React.ReactNode; viewerOpen: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [native, setNative] = useState(false);
   const [fallback, setFallback] = useState(false);
@@ -718,7 +703,7 @@ function FullScreenFrame({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!fallback) return;
+    if (!fallback || viewerOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -728,7 +713,7 @@ function FullScreenFrame({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [fallback]);
+  }, [fallback, viewerOpen]);
 
   async function toggle() {
     if (native) {

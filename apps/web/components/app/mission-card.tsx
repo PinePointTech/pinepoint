@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Hand, Hourglass, ImageOff } from "lucide-react";
 import type { Finding, Mission } from "@/lib/app-types";
 import { Spinner } from "./progress";
@@ -110,6 +110,11 @@ export function MissionCard({
   const label = TILE_LABEL[state];
   const persona = mission.persona?.trim() || "User";
   const detail = detailLine(state, mission, finding, context?.missions);
+  // The button name stays short. The goal and the detail line are its description.
+  const id = useId();
+  const goalId = `${id}-goal`;
+  const detailId = `${id}-detail`;
+  const describedBy = [mission.goal ? goalId : null, detail ? detailId : null].filter(Boolean).join(" ");
 
   return (
     <div
@@ -124,6 +129,7 @@ export function MissionCard({
         type="button"
         onClick={onOpen}
         aria-label={`Open ${persona}: ${label}`}
+        aria-describedby={describedBy || undefined}
         aria-current={selected ? "true" : undefined}
         className="flex flex-1 flex-col gap-3 rounded-2xl text-left"
       >
@@ -138,12 +144,14 @@ export function MissionCard({
           </span>
           <span className="font-semibold text-fg">{persona}</span>
           {mission.goal && (
-            <span className="line-clamp-3 text-sm text-muted [line-clamp:3]">
+            <span id={goalId} className="line-clamp-3 text-sm text-muted [line-clamp:3]">
               {mission.goal}
             </span>
           )}
           {detail && (
-            <span className="text-xs leading-relaxed break-words text-fg/80">{detail}</span>
+            <span id={detailId} className="text-xs leading-relaxed break-words text-fg/80">
+              {detail}
+            </span>
           )}
         </span>
       </button>

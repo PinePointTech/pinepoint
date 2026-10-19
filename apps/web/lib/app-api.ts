@@ -65,10 +65,14 @@ export async function listRuns(opts: ApiOptions = {}): Promise<WithFake<RunsResp
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// POST /api/runs must answer in this time. Then the page stops waiting and the person can try again.
+export const CREATE_RUN_TIMEOUT_MS = 30_000;
+
 // POST /api/runs. The route answers in a few seconds: 202 planning for a new run, or 200
 // with existing: true for a run of the same commit that is still going. Planning and the
 // Computer starts go on after the answer. A failure throws ApiError; its runId is set when
-// the run row exists, so the page can open the run anyway.
+// the run row exists, so the page can open the run anyway. No answer in 30 seconds throws
+// ApiError with status 0.
 export async function createRun(
   prUrl: string,
   opts: ApiOptions & { force?: boolean } = {},
@@ -85,6 +89,7 @@ export async function createRun(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(opts.force ? { prUrl, force: true } : { prUrl }),
+      signal: AbortSignal.timeout(CREATE_RUN_TIMEOUT_MS),
     });
     if (typeof body.runId !== "string") throw new ApiError("The answer has no run id.", 200);
     return {
@@ -95,6 +100,12 @@ export async function createRun(
     };
   } catch (err) {
     if (err instanceof NotFound) return fake();
+    const name = (err as Error | null)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new ApiError("The server did not answer in 30 seconds. Try again.", 0);
+    }
+    // fetch rejects with a TypeError when there is no answer at all.
+    if (err instanceof TypeError) throw new ApiError("PinePoint cannot reach the server. Try again.", 0);
     throw err;
   }
 }

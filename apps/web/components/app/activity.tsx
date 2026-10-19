@@ -17,7 +17,8 @@ function Orbit() {
   );
 }
 
-const ended = (m: Mission) => m.status !== "queued" && m.status !== "running";
+// A user that waits for a person is not done: its computer stays on until someone helps.
+const ended = (m: Mission) => m.status !== "queued" && m.status !== "running" && m.status !== "needs_you";
 const starting = (m: Mission) => m.status === "running" && m.has_computer === false;
 const testing = (m: Mission) => m.status === "running" && m.has_computer !== false;
 
@@ -26,7 +27,7 @@ function users(n: number): string {
 }
 
 // What the run does now, in plain words, from the run and mission rows.
-function stageOf(run: Run, missions: Mission[]): { text: string; detail: string | null } | null {
+export function stageOf(run: Run, missions: Mission[]): { text: string; detail: string | null } | null {
   switch (run.status) {
     case "planning":
       return { text: "Reading the PR and planning 10 missions with Claude.", detail: null };
@@ -34,6 +35,8 @@ function stageOf(run: Run, missions: Mission[]): { text: string; detail: string 
       return { text: "Building the findings and writing the review.", detail: null };
     case "running": {
       const lines: string[] = [];
+      const needYou = missions.filter((m) => m.status === "needs_you").length;
+      if (needYou > 0) lines.push(`${users(needYou)} ${needYou === 1 ? "needs" : "need"} you. Open the yellow card.`);
       // Of the missions that have a slot now, how many have their Computer.
       const claimed = missions.filter((m) => m.status === "running");
       const startingNow = claimed.filter(starting).length;
@@ -50,9 +53,13 @@ function stageOf(run: Run, missions: Mission[]): { text: string; detail: string 
       }
       const queued = missions.filter((m) => m.status === "queued").length;
       if (lines.length === 0) {
-        lines.push(queued > 0 ? `${users(queued)} wait for a free computer.` : "Running the simulated users on Pine computers.");
+        lines.push(
+          queued > 0
+            ? `${users(queued)} ${queued === 1 ? "waits" : "wait"} for a free computer.`
+            : "Running the simulated users on Pine computers.",
+        );
       } else if (queued > 0) {
-        lines.push(`${queued} more wait for a free computer.`);
+        lines.push(`${queued} more ${queued === 1 ? "waits" : "wait"} for a free computer.`);
       }
       return { text: lines[0]!, detail: lines.slice(1).join(" ") || null };
     }
@@ -122,8 +129,9 @@ export function RunProgress({
             )}
           </div>
           {elapsed !== null && (
-            <span className="ml-auto shrink-0 pt-0.5 tabular-nums text-muted" aria-label={`${elapsed} seconds so far`}>
-              {formatElapsed(elapsed)}
+            <span className="ml-auto shrink-0 pt-0.5 tabular-nums text-muted">
+              <span aria-hidden>{formatElapsed(elapsed)}</span>
+              <span className="sr-only">{elapsed} seconds so far</span>
             </span>
           )}
         </div>
@@ -133,16 +141,20 @@ export function RunProgress({
 }
 
 // Shows from the click on Run until the new run's first status arrives. The POST reads the PR
-// and answers in a few seconds; planning goes on after that.
+// and answers in a few seconds; planning goes on after that. It is an h2 when the page already
+// has the h1 of an open run.
 export function StartingRun({
   title,
   stage,
   seconds,
+  level = 1,
 }: {
   title: string;
   stage: string;
   seconds: number;
+  level?: 1 | 2;
 }) {
+  const Heading = level === 1 ? "h1" : "h2";
   return (
     <section
       aria-labelledby="starting-run"
@@ -152,15 +164,16 @@ export function StartingRun({
       <div className="flex items-start gap-3">
         <Orbit />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h1 id="starting-run" className="text-xl font-extrabold tracking-tight break-words">
+          <Heading id="starting-run" className="text-xl font-extrabold tracking-tight break-words">
             {title}
-          </h1>
+          </Heading>
           <p role="status" aria-live="polite" className="text-sm text-fg">
             {stage}
           </p>
         </div>
-        <span className="shrink-0 text-sm tabular-nums text-muted" aria-label={`${seconds} seconds so far`}>
-          {seconds} s
+        <span className="shrink-0 text-sm tabular-nums text-muted">
+          <span aria-hidden>{seconds} s</span>
+          <span className="sr-only">{seconds} seconds so far</span>
         </span>
       </div>
       <IndeterminateBar label="Starting the run" />
