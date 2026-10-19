@@ -8,6 +8,7 @@ import {
   Credentials,
   LifecycleError,
   NotFoundError,
+  RuntimeFailedError,
   RuntimeGoneError,
   TokenRejectedError,
   type AgentTurn,
@@ -62,16 +63,23 @@ export async function concurrencyLimit(): Promise<number> {
 /** The error names that mean the Computer is stopped or deleted. Matched by name too: two bundles can hold two copies of the SDK classes. */
 const GONE_ERROR_NAMES: ReadonlySet<string> = new Set(["RuntimeGoneError", "NotFoundError", "TokenRejectedError"]);
 
+/** RuntimeFailedError states that mean the Computer never runs again. "unavailable" can pass, so it is not here. */
+const GONE_RUNTIME_STATES: ReadonlySet<string> = new Set(["terminated", "failed"]);
+
 /**
  * True when a Pine error means the mission's Computer is gone: RuntimeGoneError, NotFoundError,
- * TokenRejectedError, or another lifecycle error with status 404. The orchestrator ends the mission
- * on it; the desktop routes answer 410 computer_stopped.
+ * TokenRejectedError, another lifecycle error with status 404, or a RuntimeFailedError (from a
+ * lifecycle operation) in state terminated or failed. The orchestrator ends the mission on it;
+ * the desktop routes answer 410 computer_stopped.
  */
 export function isComputerGone(err: unknown): boolean {
   if (err instanceof RuntimeGoneError || err instanceof NotFoundError || err instanceof TokenRejectedError) return true;
-  const e = err as { name?: unknown; status?: unknown } | null | undefined;
+  const e = err as { name?: unknown; status?: unknown; state?: unknown } | null | undefined;
   if (!e || typeof e !== "object") return false;
   if (typeof e.name === "string" && GONE_ERROR_NAMES.has(e.name)) return true;
+  if (err instanceof RuntimeFailedError || e.name === "RuntimeFailedError") {
+    return typeof e.state === "string" && GONE_RUNTIME_STATES.has(e.state);
+  }
   return err instanceof LifecycleError && e.status === 404;
 }
 

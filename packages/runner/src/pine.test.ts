@@ -6,6 +6,7 @@ import {
   CreateRateLimitedError,
   LifecycleError,
   NotFoundError,
+  RuntimeFailedError,
   RuntimeGoneError,
   ServerError,
   TokenRejectedError,
@@ -59,6 +60,15 @@ test("isComputerGone: matches by name for a copy of the SDK classes from another
     err.name = name;
     assert.equal(isComputerGone(err), true, name);
   }
+});
+
+test("isComputerGone: a RuntimeFailedError is gone only in state terminated or failed", () => {
+  assert.equal(isComputerGone(new RuntimeFailedError("rt-1", "terminated")), true);
+  assert.equal(isComputerGone(new RuntimeFailedError("rt-1", "failed")), true);
+  assert.equal(isComputerGone(new RuntimeFailedError("rt-1", "unavailable")), false, "unavailable can pass");
+  const copy = Object.assign(new Error("failed"), { name: "RuntimeFailedError", state: "terminated" });
+  assert.equal(isComputerGone(copy), true, "matched by name for a copy of the SDK class");
+  assert.equal(isComputerGone(Object.assign(new Error("failed"), { name: "RuntimeFailedError" })), false, "no state");
 });
 
 test("isComputerGone: rate limits, capacity, busy sessions and plain errors are not gone", () => {

@@ -27,6 +27,8 @@ export {
 export {
   decideTurn,
   freeSlots,
+  slotsToFill,
+  needsStarts,
   followUpsFor,
   shouldKeep,
   runIsComplete,
@@ -37,6 +39,8 @@ export {
   RELEASE_GRACE_MS,
   MAX_RUN_ERROR_CHARS,
   KEPT_CAP_PER_RUN,
+  MAX_STARTS_PER_CALL,
+  START_LEASE_SECONDS,
   PLANNING_TIMEOUT_MS,
   PLANNING_TIMEOUT_ERROR,
   type TurnFacts,
@@ -49,12 +53,26 @@ export {
   createPlanningRun,
   addMissions,
   activeRunFor,
+  expireStalePlanning,
   listRecentRuns,
   LIVE_RUN_STATUSES,
   EXISTING_RUN_STATUSES,
+  PLANNING_TIMEOUT_SECONDS,
   type CreateRunInput,
+  type RecentRun,
   type RunTarget,
 } from "./create";
+export { takeStartLease, dropStartLease, ensureStartLeaseColumn } from "./start-lease";
+export {
+  COMPUTER_STOPPED,
+  computerStopped,
+  DesktopRouteError,
+  STOPPED_STATES,
+  desktopErrorFor,
+  isStoppedState,
+  stoppedOr,
+  type DesktopError,
+} from "./desktop-errors";
 export {
   startRun,
   startQueued,

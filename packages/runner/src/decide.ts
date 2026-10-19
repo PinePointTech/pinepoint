@@ -109,6 +109,26 @@ export function freeSlots(limit: number, inUse: number): number {
   return Math.max(0, limit - inUse);
 }
 
+/**
+ * The most Computers one call starts. A start takes about 8 seconds, so 6 starts end well inside
+ * START_LEASE_SECONDS and inside the 120-second status route. A claimed mission waits at most
+ * about 45 seconds for its start, well inside START_GRACE_MS.
+ */
+export const MAX_STARTS_PER_CALL = 6;
+
+/** How long one call holds the start lease of a run (runs.start_lease_until). */
+export const START_LEASE_SECONDS = 100;
+
+/** How many queued missions one call claims: the free slots, but at most `cap`. */
+export function slotsToFill(limit: number, inUse: number, cap = MAX_STARTS_PER_CALL): number {
+  return Math.min(freeSlots(limit, inUse), Math.max(0, cap));
+}
+
+/** True when the run is running and has queued missions, so a call to startQueued has work. */
+export function needsStarts(run: Pick<RunRow, "status">, missions: Array<Pick<MissionRow, "status">>): boolean {
+  return run.status === "running" && missions.some((m) => m.status === "queued");
+}
+
 export interface FollowUp {
   kind: MissionKind;
   url: string;
@@ -163,16 +183,17 @@ export function planningTimedOut(run: Pick<RunRow, "status" | "started_at">, now
 }
 
 /**
- * The kept missions to release when a run ends: every kept mission that no Bug finding names.
- * A Bug keeps its Computers for the session link. Possible issues, old bugs and needs_you
- * missions that no Bug names stop, so they do not hold Computer slots for 24 hours.
+ * The kept missions to release when a run ends: every kept mission that no Bug finding names,
+ * except needs_you. A Bug keeps its Computers for the session link, and a needs_you mission keeps
+ * its Computer for "Take control" (shouldKeep). Possible issues and old bugs stop, so they do not
+ * hold Computer slots for 24 hours.
  */
-export function keptToRelease<T extends Pick<MissionRow, "id" | "kept">>(
+export function keptToRelease<T extends Pick<MissionRow, "id" | "kept" | "status">>(
   missions: T[],
   findings: Array<Pick<FindingRow, "level" | "mission_ids">>,
 ): T[] {
   const needed = new Set(findings.filter((f) => f.level === "bug").flatMap((f) => f.mission_ids ?? []));
-  return missions.filter((m) => m.kept && !needed.has(m.id));
+  return missions.filter((m) => m.kept && m.status !== "needs_you" && !needed.has(m.id));
 }
 
 /**

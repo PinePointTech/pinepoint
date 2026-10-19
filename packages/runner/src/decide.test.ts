@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   KEPT_CAP_PER_RUN,
   MAX_RUN_ERROR_CHARS,
+  MAX_STARTS_PER_CALL,
   PLANNING_TIMEOUT_ERROR,
   PLANNING_TIMEOUT_MS,
   RELEASE_GRACE_MS,
@@ -10,11 +11,13 @@ import {
   followUpsFor,
   freeSlots,
   keptToRelease,
+  needsStarts,
   planningTimedOut,
   releaseDelayMs,
   runErrorText,
   runIsComplete,
   shouldKeep,
+  slotsToFill,
 } from "./decide";
 import { MISSION_BUDGET_MS } from "./pine";
 import { parseMissionResult } from "./pine";
@@ -198,29 +201,58 @@ test("runErrorText: prefix and message, cut at the limit", () => {
   assert.ok(long.endsWith("..."));
 });
 
-test("keptToRelease: releases kept missions that no Bug finding names", () => {
+test("keptToRelease: releases kept missions that no Bug finding names, and keeps needs_you", () => {
   const missions = [
-    { id: "bug-preview", kept: true },
-    { id: "possible-preview", kept: true },
-    { id: "old-bug-preview", kept: true },
-    { id: "needs-you", kept: true },
-    { id: "stopped", kept: false },
+    { id: "bug-preview", kept: true, status: "failed" as const },
+    { id: "possible-preview", kept: true, status: "failed" as const },
+    { id: "old-bug-preview", kept: true, status: "failed" as const },
+    { id: "needs-you", kept: true, status: "needs_you" as const },
+    { id: "stopped", kept: false, status: "failed" as const },
   ];
   const findings = [
     { level: "bug" as const, mission_ids: ["bug-preview", "stopped"] },
-    { level: "possible" as const, mission_ids: ["possible-preview"] },
+    { level: "possible" as const, mission_ids: ["possible-preview", "needs-you"] },
     { level: "old_bug" as const, mission_ids: ["old-bug-preview"] },
     { level: null, mission_ids: null },
   ];
   assert.deepEqual(
     keptToRelease(missions, findings).map((m) => m.id),
-    ["possible-preview", "old-bug-preview", "needs-you"],
+    ["possible-preview", "old-bug-preview"],
+    "a needs_you Computer stays for Take control, also when no Bug names it",
   );
 });
 
-test("keptToRelease: releases every kept mission when there is no Bug, and nothing when none is kept", () => {
-  assert.deepEqual(keptToRelease([{ id: "a", kept: true }, { id: "b", kept: true }], []).map((m) => m.id), ["a", "b"]);
-  assert.deepEqual(keptToRelease([{ id: "a", kept: false }], [{ level: "possible", mission_ids: ["a"] }]), []);
+test("keptToRelease: releases every kept failed mission when there is no Bug, and nothing when none is kept", () => {
+  assert.deepEqual(
+    keptToRelease(
+      [
+        { id: "a", kept: true, status: "failed" },
+        { id: "b", kept: true, status: "failed" },
+        { id: "c", kept: true, status: "needs_you" },
+      ],
+      [],
+    ).map((m) => m.id),
+    ["a", "b"],
+  );
+  assert.deepEqual(keptToRelease([{ id: "a", kept: false, status: "failed" }], [{ level: "possible", mission_ids: ["a"] }]), []);
+});
+
+test("slotsToFill: the free slots, at most the cap per call", () => {
+  assert.equal(slotsToFill(20, 0), MAX_STARTS_PER_CALL);
+  assert.equal(slotsToFill(20, 17), 3);
+  assert.equal(slotsToFill(20, 20), 0);
+  assert.equal(slotsToFill(20, 25), 0);
+  assert.equal(slotsToFill(20, 0, 2), 2);
+  assert.equal(slotsToFill(20, 0, -1), 0);
+});
+
+test("needsStarts: only a running run with queued missions", () => {
+  assert.equal(needsStarts({ status: "running" }, [{ status: "running" }, { status: "queued" }]), true);
+  assert.equal(needsStarts({ status: "running" }, [{ status: "running" }, { status: "passed" }]), false);
+  assert.equal(needsStarts({ status: "running" }, []), false);
+  assert.equal(needsStarts({ status: "planning" }, [{ status: "queued" }]), false);
+  assert.equal(needsStarts({ status: "reporting" }, [{ status: "queued" }]), false);
+  assert.equal(needsStarts({ status: "done" }, [{ status: "queued" }]), false);
 });
 
 test("releaseDelayMs: waits out the rest of the grace period after the mission ended", () => {
