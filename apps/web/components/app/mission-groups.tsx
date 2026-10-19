@@ -12,21 +12,28 @@ import {
 import { useId } from "react";
 import type { Finding, Mission } from "@/lib/app-types";
 import { MissionCard } from "./mission-card";
-import { findingFor, tileState, type TileState } from "./tile-state";
+import { findingFor, tileState, type TileContext, type TileState } from "./tile-state";
 
 const BASE_ORDER = ["Flow", "UI", "Abuse", "Access", "Safety"];
 const OTHER = "Other";
 
-// Problems first.
+// Problems first, then users that still work, then the ones that passed.
 const RANK: Record<TileState, number> = {
   bug: 0,
   needs_you: 1,
   possible: 2,
-  failed: 3,
-  blocked: 4,
-  running: 5,
-  queued: 6,
-  passed: 7,
+  check_failed: 3,
+  rechecking: 4,
+  old_bug: 5,
+  could_not_run: 6,
+  timed_out: 7,
+  blocked: 8,
+  not_confirmed: 9,
+  testing: 10,
+  starting: 11,
+  waiting: 12,
+  queued: 13,
+  passed: 14,
 };
 
 const LENS_ICON: Record<string, LucideIcon> = {
@@ -50,7 +57,7 @@ interface Group {
   entries: Entry[];
 }
 
-function buildGroups(missions: Mission[], findings: Finding[]): Group[] {
+function buildGroups(missions: Mission[], findings: Finding[], context: TileContext): Group[] {
   const byLens = new Map<string, Group>();
   let extra = 0;
 
@@ -71,7 +78,7 @@ function buildGroups(missions: Mission[], findings: Finding[]): Group[] {
       byLens.set(lens, group);
     }
     const finding = findingFor(mission, findings);
-    const rank = RANK[tileState(mission, finding)];
+    const rank = RANK[tileState(mission, finding, context)];
     group.entries.push({ mission, finding, rank });
     group.best = Math.min(group.best, rank);
   }
@@ -85,16 +92,21 @@ function buildGroups(missions: Mission[], findings: Finding[]): Group[] {
 export function MissionGroups({
   missions,
   findings,
+  run,
+  now,
   selectedId,
   onOpen,
 }: {
   missions: Mission[];
   findings: Finding[];
+  run: TileContext["run"];
+  now?: number;
   selectedId: string | null;
   onOpen: (missionId: string) => void;
 }) {
   const idPrefix = useId();
-  const groups = buildGroups(missions, findings);
+  const context: TileContext = { run, missions, now };
+  const groups = buildGroups(missions, findings, context);
   if (groups.length === 0) return null;
 
   return (
@@ -122,6 +134,7 @@ export function MissionGroups({
                   key={mission.id}
                   mission={mission}
                   finding={finding}
+                  context={context}
                   selected={mission.id === selectedId}
                   onOpen={() => onOpen(mission.id)}
                 />
