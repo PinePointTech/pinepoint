@@ -242,6 +242,8 @@ export interface StepShot {
 
 /** At most this many step pictures are kept for one mission. The last picture is always kept. */
 export const MAX_STEP_SHOTS = 12;
+/** A frame smaller than this is a blank screen (a white 1911x954 WebP is about 3.8 KB). */
+export const MIN_FRAME_BYTES = 6_000;
 /** Event pages read for one turn at most. Each page holds up to EVENTS_PAGE_LIMIT events. */
 const MAX_EVENT_PAGES = 20;
 const EVENTS_PAGE_LIMIT = 100;
@@ -288,6 +290,11 @@ export async function collectStepShots(handle: PineHandle, missionId: string): P
   } catch (err) {
     console.warn(`[runner] could not read frames for mission ${missionId}: ${(err as Error).message}`);
   }
+
+  // Pine's first frame is often the blank browser before the first page loads (about 4 KB of white WebP).
+  // Drop such near-empty pictures when the turn has real ones.
+  const real = frames.filter((f) => f.data.byteLength >= MIN_FRAME_BYTES);
+  if (real.length > 0 && real.length < frames.length) frames.splice(0, frames.length, ...real);
 
   if (frames.length === 0) {
     // No frame events came back. Take one picture of the screen as it is now, so the mission has a last screen.

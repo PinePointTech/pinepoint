@@ -29,6 +29,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const turnIds = new Set<string>();
     let frames = 0;
     let frameBytes = 0;
+    const frameList: Array<{ bytes: number; title: string | null; type: string }> = [];
     for (const e of page.events) {
       types[e.type] = (types[e.type] ?? 0) + 1;
       if (e.turnId) turnIds.add(e.turnId);
@@ -36,6 +37,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       if (f) {
         frames += 1;
         frameBytes += f.data.byteLength;
+        frameList.push({ bytes: f.data.byteLength, title: f.activity?.title ?? null, type: f.mediaType });
       }
     }
     const firstFrameEvent = page.events.find((e) => e.type === "frame");
@@ -58,6 +60,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       types,
       turnIds: [...turnIds],
       parsedFrames: frames,
+      frameList,
       frameBytes,
       rawKeys: Object.keys(page.raw ?? {}),
       firstFramePayloadKeys: firstFrameEvent ? Object.keys(firstFrameEvent.payload ?? {}) : null,
