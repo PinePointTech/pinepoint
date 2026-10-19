@@ -23,7 +23,7 @@ import {
   verifySignature,
   webhookPaths,
 } from "@pinepoint/github/webhook";
-import { activeRunFor } from "@pinepoint/runner";
+import { activeRunFor, expireStalePlanning } from "@pinepoint/runner";
 import { DRIVE_SLICE_MS } from "@/lib/drive";
 import { planAndDrive, prepareRun, type PlanningRun } from "@/lib/start-run";
 import { attachRun, claim, releaseClaim, type ClaimTarget } from "@/lib/webhook-claims";
@@ -87,12 +87,12 @@ async function startAndDrive(target: ClaimTarget, sliceEndsAt: number): Promise<
   const label = `${target.owner}/${target.repo}#${target.number}@${target.headSha.slice(0, 7)}`;
   let run: PlanningRun;
   try {
+    // Not forced: the webhook claim lets only one delivery get here, and prepareRun's live claim
+    // keeps it from starting a second run next to one that a person started on /app meanwhile.
     const outcome = await prepareRun({
       prUrl: prUrl(target),
       noPreview: "skip",
       expectHeadSha: target.headSha,
-      // The claim already lets only one delivery start a run for this head.
-      force: true,
     });
     if (outcome.status !== "planning") {
       console.log(`[webhook] ${label}: no run (${outcome.status})`);
@@ -151,6 +151,11 @@ export async function POST(request: Request) {
       return json({ ok: true, event, pr: target.number, skipped: `The PR changes no file under ${prefixes.join(", ")}.` });
     }
 
+    // A run that stayed in planning past the timeout belongs to a background step that died.
+    // Fail it first, so it does not block every later delivery for this head.
+    await expireStalePlanning(target).catch((err: Error) =>
+      console.warn(`[webhook] could not expire stale planning runs: ${err.message}`),
+    );
     const existing = await activeRunFor(target);
     if (existing) {
       return json({ ok: true, event, pr: target.number, skipped: "A run exists for this commit.", runId: existing.id, status: existing.status });

@@ -3,20 +3,25 @@
 // and the session token stay on the server and never appear in a response or a log.
 
 import {
-  ApiError,
   Binding,
-  CapacityExceededError,
   Client,
-  CreateRateLimitedError,
   Credentials,
-  LifecycleError,
-  PortalError,
-  ProblemType,
+  type ApiError,
   type Computer,
+  type LifecycleError,
   type Session,
 } from "@pinesandbox/computer";
 import { loadHandle, type PineHandle } from "@pinepoint/core";
 import { isComputerGone } from "@pinepoint/runner/pine";
+import {
+  DesktopRouteError,
+  computerStopped,
+  desktopErrorFor,
+  isStoppedState,
+  stoppedOr as stoppedOrFrom,
+} from "@pinepoint/runner/desktop-errors";
+
+export { DesktopRouteError };
 
 /** The delegation envelope that `connectionFromDelegation` in @pinesandbox/computer-web reads. */
 export type DesktopDelegation = ReturnType<
@@ -34,19 +39,6 @@ export interface ControlResponse {
   controller: string;
   epoch: number;
   sessionName: string;
-}
-
-/** A failure with a status code and a short message that is safe to send to the browser. */
-export class DesktopRouteError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly retryAfter?: number,
-  ) {
-    super(message);
-    this.name = "DesktopRouteError";
-  }
 }
 
 interface MissionComputer {
@@ -82,28 +74,15 @@ function missionSession({ handle, computer }: MissionComputer): Session {
   return computer.adoptSession(handle.sessionName, handle.sessionToken);
 }
 
-/** Lifecycle states of a Computer that never runs again. */
-const STOPPED_STATES: ReadonlySet<string> = new Set(["terminated", "failed"]);
 /** How long the check after a failed call waits for the Computer's state. */
 const STATUS_TIMEOUT_MS = 5_000;
 
-function computerStopped(): DesktopRouteError {
-  return new DesktopRouteError(410, "computer_stopped", "The Computer for this mission is stopped.");
-}
-
 /**
  * After a failed call: the 410 computer_stopped error when Pine confirms that the Computer is
- * stopped or deleted, else the error itself. A stopped Computer can fail a call with a transport
- * or session error first, so the lifecycle state decides.
+ * stopping, stopped or deleted, else the error itself (runner/desktop-errors.ts stoppedOr).
  */
-async function stoppedOr(computer: Computer, err: unknown): Promise<unknown> {
-  if (err instanceof DesktopRouteError || isComputerGone(err)) return err;
-  try {
-    const state = await computer.status({ signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
-    return STOPPED_STATES.has(state) ? computerStopped() : err;
-  } catch (statusErr) {
-    return isComputerGone(statusErr) ? computerStopped() : err;
-  }
+function stoppedOr(computer: Computer, err: unknown): Promise<unknown> {
+  return stoppedOrFrom(() => computer.status({ signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) }), err);
 }
 
 /**
@@ -120,7 +99,7 @@ async function resumeIfPaused(missionId: string, computer: Computer): Promise<vo
     logPineError("status", missionId, err);
     return;
   }
-  if (STOPPED_STATES.has(state)) throw computerStopped();
+  if (isStoppedState(state)) throw computerStopped();
   if (state === "paused" || state === "pausing" || state === "resuming") {
     try {
       await computer.resume();
@@ -215,51 +194,22 @@ export function jsonNoStore(body: unknown): Response {
   return Response.json(body, { headers: noStore });
 }
 
-/** Maps an error to a JSON response with a status code. Sends no secret to the browser. */
+/**
+ * Maps an error to a JSON response with a status code (runner/desktop-errors.ts desktopErrorFor):
+ * 410 computer_stopped, 409 session_busy, 429 create_rate_limited or capacity_exceeded, 502
+ * pine_error. Sends no secret to the browser.
+ */
 export function errorResponse(step: string, missionId: string, err: unknown): Response {
-  const fail = (status: number, code: string, error: string, retryAfter?: number) => {
-    const headers: Record<string, string> = { ...noStore };
-    if (retryAfter !== undefined) {
-      headers["Retry-After"] = String(retryAfter);
-    }
-    return Response.json(
-      retryAfter === undefined ? { error, code } : { error, code, retryAfter },
-      { status, headers },
-    );
-  };
-
-  if (err instanceof DesktopRouteError) {
-    return fail(err.status, err.code, err.message, err.retryAfter);
+  if (!(err instanceof DesktopRouteError)) {
+    logPineError(step, missionId, err);
   }
-
-  logPineError(step, missionId, err);
-
-  // RuntimeGoneError, NotFoundError, TokenRejectedError or a lifecycle 404: the Computer was
-  // stopped (the run released it, or its idle timeout ended). The browser shows that, not an error.
-  if (isComputerGone(err)) {
-    const stopped = computerStopped();
-    return fail(stopped.status, stopped.code, stopped.message);
+  const { status, code, error, retryAfter } = desktopErrorFor(step, err);
+  const headers: Record<string, string> = { ...noStore };
+  if (retryAfter !== undefined) {
+    headers["Retry-After"] = String(retryAfter);
   }
-  if (err instanceof ApiError && err.is(ProblemType.sessionBusy)) {
-    return fail(409, "session_busy", "The session is busy. Try again.");
-  }
-  if (err instanceof CreateRateLimitedError) {
-    return fail(
-      429,
-      "create_rate_limited",
-      "Pine limits how many Computers start each minute. Try again later.",
-      Math.max(1, err.retryAfterSeconds),
-    );
-  }
-  if (err instanceof CapacityExceededError) {
-    return fail(
-      429,
-      "capacity_exceeded",
-      "The Pine project is at its Computer limit. Try again later.",
-    );
-  }
-  if (err instanceof ApiError || err instanceof LifecycleError || err instanceof PortalError) {
-    return fail(502, "pine_error", `Pine refused the ${step} request.`);
-  }
-  return fail(502, "pine_error", `The ${step} request failed.`);
+  return Response.json(
+    retryAfter === undefined ? { error, code } : { error, code, retryAfter },
+    { status, headers },
+  );
 }

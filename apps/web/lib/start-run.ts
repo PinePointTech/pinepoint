@@ -1,7 +1,9 @@
 // Starts a run for a PR in two steps. POST /api/runs and the GitHub webhook both use them. Server code only.
 //
 // prepareRun is fast (a few seconds): read the PR, skip a duplicate, handle a PR with no preview,
-// and insert the run with status `planning`. The caller answers right after it.
+// and insert the run with status `planning`. The caller answers right after it. The duplicate
+// guard is the live claim (lib/webhook-claims.ts): of two callers for one PR head, only one inserts
+// a run, and the other answers with that run.
 // planAndDrive runs in next/server after(): plan the missions, save them (the run moves to
 // `running`), start the first Computers, then drive the run (lib/drive.ts). A planner error moves
 // the run to `failed` with runs.error. A call that dies mid-plan leaves the run in `planning`, and
@@ -17,11 +19,14 @@ import {
   addMissions,
   createNoPreviewRun,
   createPlanningRun,
+  expireStalePlanning,
   failRun,
   runErrorText,
   startRun,
+  type RunTarget,
 } from "@pinepoint/runner";
 import { driveRun } from "./drive";
+import { attachLiveRun, claimLiveHead, releaseLiveClaim } from "./webhook-claims";
 
 /** getPrContext failed. POST /api/runs answers 400 with this message. */
 export class PrReadError extends Error {
@@ -43,10 +48,7 @@ export interface StartRunInput {
   noPreview?: "record" | "skip";
   /** When set, stop without a run if the PR head is no longer this SHA. */
   expectHeadSha?: string;
-  /**
-   * Start a run also when one for the same PR head is still planning, running or reporting.
-   * The webhook sets it: its claim already makes sure that only one delivery starts a run.
-   */
+  /** Start a run also when one for the same PR head is still planning, running or reporting. */
   force?: boolean;
 }
 
@@ -65,23 +67,72 @@ export type PrepareOutcome =
   | { status: "no_preview_skipped"; headSha: string }
   | { status: "head_moved"; headSha: string };
 
+/** What prepareRun reads and writes. The tests replace these. */
+export interface PrepareDeps {
+  getPrContext: (prUrl: string) => Promise<PrContext>;
+  activeRunFor: typeof activeRunFor;
+  expireStalePlanning: typeof expireStalePlanning;
+  createNoPreviewRun: typeof createNoPreviewRun;
+  createPlanningRun: typeof createPlanningRun;
+  postNoPreviewComment: typeof postNoPreviewComment;
+  claimLiveHead: typeof claimLiveHead;
+  attachLiveRun: typeof attachLiveRun;
+  releaseLiveClaim: typeof releaseLiveClaim;
+  sleep: (ms: number) => Promise<void>;
+}
+
+export const prepareDeps: PrepareDeps = {
+  getPrContext,
+  activeRunFor,
+  expireStalePlanning,
+  createNoPreviewRun,
+  createPlanningRun,
+  postNoPreviewComment,
+  claimLiveHead,
+  attachLiveRun,
+  releaseLiveClaim,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
+
+/** How long a caller that lost the live claim waits for the winner's run row, and how often it looks. */
+export const LIVE_RUN_WAIT_MS = 4_000;
+export const LIVE_RUN_POLL_MS = 500;
+
+/** The error when a caller lost the live claim and the winner's run did not come in LIVE_RUN_WAIT_MS. */
+export const CLAIM_BUSY_ERROR = "Another request is starting a run for this commit. Try again in a minute.";
+
+/** The live run of this head, looking again every LIVE_RUN_POLL_MS for up to LIVE_RUN_WAIT_MS. */
+async function waitForLiveRun(t: RunTarget, deps: PrepareDeps) {
+  for (let waited = 0; ; waited += LIVE_RUN_POLL_MS) {
+    const run = await deps.activeRunFor(t, LIVE_RUN_STATUSES);
+    if (run || waited >= LIVE_RUN_WAIT_MS) return run;
+    await deps.sleep(LIVE_RUN_POLL_MS);
+  }
+}
+
 /** The fast step: everything before the planner. The run row, when there is one, is the last thing it writes. */
-export async function prepareRun(input: StartRunInput): Promise<PrepareOutcome> {
+export async function prepareRun(input: StartRunInput, deps: PrepareDeps = prepareDeps): Promise<PrepareOutcome> {
   let context: PrContext;
   try {
-    context = await getPrContext(input.prUrl);
+    context = await deps.getPrContext(input.prUrl);
   } catch (err) {
     throw new PrReadError(err);
   }
   if (input.expectHeadSha && context.headSha !== input.expectHeadSha) {
     return { status: "head_moved", headSha: context.headSha };
   }
+  const target: RunTarget = { owner: context.owner, repo: context.repo, number: context.number, headSha: context.headSha };
+
+  // A run of this head that stayed in planning past the timeout belongs to a background step
+  // that died. Fail it, so it does not show as planning forever. activeRunFor skips it anyway.
+  try {
+    await deps.expireStalePlanning(target);
+  } catch (err) {
+    console.warn(`[runs] could not expire stale planning runs: ${(err as Error).message}`);
+  }
 
   if (!input.force) {
-    const existing = await activeRunFor(
-      { owner: context.owner, repo: context.repo, number: context.number, headSha: context.headSha },
-      LIVE_RUN_STATUSES,
-    );
+    const existing = await deps.activeRunFor(target, LIVE_RUN_STATUSES);
     if (existing) return { status: "existing", runId: existing.id, runStatus: existing.status };
   }
 
@@ -102,16 +153,52 @@ export async function prepareRun(input: StartRunInput): Promise<PrepareOutcome> 
     if (input.noPreview === "skip") {
       return { status: "no_preview_skipped", headSha: context.headSha };
     }
-    const runId = await createNoPreviewRun(base);
+    const runId = await deps.createNoPreviewRun(base);
     try {
-      await postNoPreviewComment({ owner: context.owner, repo: context.repo, number: context.number });
+      await deps.postNoPreviewComment({ owner: context.owner, repo: context.repo, number: context.number });
     } catch (err) {
       console.warn(`[runs] no-preview comment failed: ${(err as Error).message}`);
     }
     return { status: "no_preview", runId };
   }
 
-  const runId = await createPlanningRun(base);
+  // The check above and the insert below are two statements, and the PR read took seconds. The
+  // live claim is one statement, so of two callers for this head only one gets past it.
+  let claimed = false;
+  if (!input.force) {
+    let won: boolean | null;
+    try {
+      won = await deps.claimLiveHead(target);
+    } catch (err) {
+      // The claims table cannot be read or made. Go on with the check above alone, as before
+      // the claim existed: a run start must not depend on it.
+      console.warn(`[runs] could not take the live claim: ${(err as Error).message}`);
+      won = null;
+    }
+    if (won === false) {
+      const existing = await waitForLiveRun(target, deps);
+      if (existing) return { status: "existing", runId: existing.id, runStatus: existing.status };
+      throw new Error(CLAIM_BUSY_ERROR);
+    }
+    claimed = won === true;
+  }
+
+  let runId: string;
+  try {
+    runId = await deps.createPlanningRun(base);
+  } catch (err) {
+    if (claimed) {
+      await deps.releaseLiveClaim(target).catch((e: Error) => console.warn(`[runs] could not release the live claim: ${e.message}`));
+    }
+    throw err;
+  }
+  if (claimed) {
+    // A failed attach only leaves the claim without its run id. It goes stale in 2 minutes, and
+    // the claim check also looks at the runs table, so no second run starts meanwhile.
+    await deps.attachLiveRun(target, runId).catch((e: Error) =>
+      console.warn(`[runs] could not attach run ${runId} to the live claim: ${e.message}`),
+    );
+  }
   return {
     status: "planning",
     run: {

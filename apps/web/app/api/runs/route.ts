@@ -10,6 +10,8 @@
 //   200  { runId, status: "no_preview" }    the PR has no preview
 //   202  { runId, status: "planning" }      the run exists; planning goes on in the background
 //   500  { error }                          an unexpected error. The run row is the last write, so none is left behind.
+//                                           Also when another request holds the claim for this PR head and its run
+//                                           does not come within 4 seconds (prepareRun, CLAIM_BUSY_ERROR).
 
 import { after } from "next/server";
 import { z } from "zod";

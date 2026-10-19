@@ -7,11 +7,23 @@
 //
 // postReview locks on runs.review_posted_at, so two callers cannot post two reviews. An error is
 // logged and swallowed: a failed post or a failed stop must not move the run to failed or keep it in reporting.
+// The stops run in next/server after(), so the run moves to done without waiting for them.
 
+import { after } from "next/server";
 import { buildFindings } from "@pinepoint/ai";
 import type { FindingRow } from "@pinepoint/core";
 import { releaseUnneededKept, setRunCompleteHook } from "@pinepoint/runner";
 import { postReview } from "@pinepoint/github/review";
+
+/** Stops the kept Computers that no Bug needs. Logs and never throws. */
+async function releaseKept(runId: string, findings: FindingRow[]): Promise<void> {
+  try {
+    const released = await releaseUnneededKept(runId, findings);
+    if (released > 0) console.log(`[runner] stopped ${released} kept Computer(s) of run ${runId}`);
+  } catch (err) {
+    console.error(`[runner] could not stop the kept Computers of run ${runId}: ${(err as Error).message}`);
+  }
+}
 
 setRunCompleteHook(async (runId) => {
   // VI-12 first: the review reads the findings rows.
@@ -31,15 +43,18 @@ setRunCompleteHook(async (runId) => {
   } catch (err) {
     console.error(`[review] could not post the review for run ${runId}: ${(err as Error).message}`);
   }
-  // Only a Bug keeps its Computers, for the "Open the paused session" link in its PR comment.
-  // The others stop now instead of after the 24-hour idle timeout, so later runs get free slots.
-  // Without findings it is not clear which Computers a Bug needs, so all stay.
+  // Only a Bug (for the "Open the paused session" link in its PR comment) and a needs_you mission
+  // (for "Take control") keep their Computers. The others stop now instead of after the 24-hour
+  // idle timeout, so later runs get free slots. Without findings it is not clear which Computers
+  // a Bug needs, so all stay. The release can wait RELEASE_GRACE_MS (15 seconds) and then stops
+  // each Computer, so it runs after the response: the run must not stay in reporting for it.
   if (findings) {
+    const found = findings;
     try {
-      const released = await releaseUnneededKept(runId, findings);
-      if (released > 0) console.log(`[runner] stopped ${released} kept Computer(s) of run ${runId}`);
-    } catch (err) {
-      console.error(`[runner] could not stop the kept Computers of run ${runId}: ${(err as Error).message}`);
+      after(() => releaseKept(runId, found));
+    } catch {
+      // Not inside a request (a script): run it without waiting.
+      void releaseKept(runId, found);
     }
   }
 });
