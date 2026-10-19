@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isUndefinedColumn, withRunErrorColumn } from "./run-error";
+import { alterOnce, isUndefinedColumn, withRunErrorColumn } from "./run-error";
 
 const undefinedColumn = Object.assign(new Error('column "error" of relation "runs" does not exist'), { code: "42703" });
 
@@ -73,5 +73,19 @@ test("withRunErrorColumn tries one time only after the column is added", async (
     ),
     /does not exist/,
   );
+  assert.equal(calls, 2);
+});
+
+test("alterOnce runs the statement once, and again only after a failed try", async () => {
+  let calls = 0;
+  let fail = true;
+  const ensure = alterOnce(async () => {
+    calls += 1;
+    if (fail) throw new Error("permission denied for table runs");
+  });
+  await assert.rejects(ensure(), /permission denied/);
+  fail = false;
+  await Promise.all([ensure(), ensure()]);
+  await ensure();
   assert.equal(calls, 2);
 });

@@ -12,7 +12,7 @@ export {
   type ShotInput,
   type StoredShot,
 } from "./shots";
-export { ensureRunErrorColumn, isUndefinedColumn, withRunErrorColumn } from "./run-error";
+export { alterOnce, ensureRunErrorColumn, isUndefinedColumn, withAddedColumn, withRunErrorColumn } from "./run-error";
 export {
   LENSES,
   MISSIONS_PER_RUN,

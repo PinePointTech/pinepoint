@@ -73,8 +73,9 @@ export async function saveShot(input: ShotInput, retried = false): Promise<strin
 
 /**
  * The picture path of each mission that has one, for a mission whose screenshot_url is not written
- * yet. The choice is the one the runner makes: fail.png (idx 0) first, else the newest step picture.
- * An empty map when the table does not exist yet.
+ * yet. The choice is the one the runner makes: fail.png (idx 0) first, else the last step picture
+ * (the highest idx). It orders by idx, not by insert time: the runner saves the step pictures in
+ * parallel, so created_at does not follow step order. An empty map when the table does not exist yet.
  */
 export async function latestShotPaths(missionIds: string[]): Promise<Map<string, string>> {
   const paths = new Map<string, string>();
@@ -83,7 +84,7 @@ export async function latestShotPaths(missionIds: string[]): Promise<Map<string,
     const rows = (await sql().query(
       `select distinct on (mission_id) mission_id, id from mission_shots
        where mission_id = any($1::uuid[])
-       order by mission_id, (idx = 0) desc, created_at desc, idx desc`,
+       order by mission_id, (idx = 0) desc, idx desc, created_at desc`,
       [missionIds],
     )) as Array<{ mission_id: string; id: string }>;
     for (const row of rows) paths.set(row.mission_id, shotPath(row.id));
