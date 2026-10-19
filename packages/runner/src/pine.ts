@@ -6,6 +6,10 @@ import {
   Binding,
   Client,
   Credentials,
+  LifecycleError,
+  NotFoundError,
+  RuntimeGoneError,
+  TokenRejectedError,
   type AgentTurn,
   type Artifact,
   type Computer,
@@ -53,6 +57,22 @@ export async function concurrencyLimit(): Promise<number> {
     cachedPolicy = { value: await pineClient().projectPolicy(), at: now };
   }
   return cachedPolicy.value.maxConcurrentComputers ?? DEFAULT_CONCURRENCY_LIMIT;
+}
+
+/** The error names that mean the Computer is stopped or deleted. Matched by name too: two bundles can hold two copies of the SDK classes. */
+const GONE_ERROR_NAMES: ReadonlySet<string> = new Set(["RuntimeGoneError", "NotFoundError", "TokenRejectedError"]);
+
+/**
+ * True when a Pine error means the mission's Computer is gone: RuntimeGoneError, NotFoundError,
+ * TokenRejectedError, or another lifecycle error with status 404. The orchestrator ends the mission
+ * on it; the desktop routes answer 410 computer_stopped.
+ */
+export function isComputerGone(err: unknown): boolean {
+  if (err instanceof RuntimeGoneError || err instanceof NotFoundError || err instanceof TokenRejectedError) return true;
+  const e = err as { name?: unknown; status?: unknown } | null | undefined;
+  if (!e || typeof e !== "object") return false;
+  if (typeof e.name === "string" && GONE_ERROR_NAMES.has(e.name)) return true;
+  return err instanceof LifecycleError && e.status === 404;
 }
 
 /** Rebuilds the Computer and the session from a saved handle. No request is made. */
@@ -244,6 +264,8 @@ export interface StepShot {
 export const MAX_STEP_SHOTS = 12;
 /** A frame smaller than this is a blank screen (a white 1911x954 WebP is about 3.8 KB). */
 export const MIN_FRAME_BYTES = 6_000;
+/** How long the last-screen fallback waits for drive.screenshot. It runs inside a status call. */
+export const LAST_SCREEN_TIMEOUT_MS = 5_000;
 /** Event pages read for one turn at most. Each page holds up to EVENTS_PAGE_LIMIT events. */
 const MAX_EVENT_PAGES = 20;
 const EVENTS_PAGE_LIMIT = 100;
@@ -299,7 +321,7 @@ export async function collectStepShots(handle: PineHandle, missionId: string): P
   if (frames.length === 0) {
     // No frame events came back. Take one picture of the screen as it is now, so the mission has a last screen.
     try {
-      const shot = await session.drive.screenshot({ signal: AbortSignal.timeout(15_000) });
+      const shot = await session.drive.screenshot({ signal: AbortSignal.timeout(LAST_SCREEN_TIMEOUT_MS) });
       if (shot.screenshot) {
         frames.push({ data: Buffer.from(shot.screenshot, "base64"), mediaType: "image/png", title: "Last screen", at: new Date().toISOString() });
       }

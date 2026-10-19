@@ -43,7 +43,7 @@ type Mission = {
   usage: { cost?: { total?: number | null } } | null;
   result: Record<string, unknown> | null;
 };
-type Snapshot = { run: { id: string; status: string }; missions: Mission[]; findings: unknown[] };
+type Snapshot = { run: { id: string; status: string; error?: string | null }; missions: Mission[]; findings: unknown[] };
 
 const t0 = Date.now();
 const elapsed = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6);
@@ -90,9 +90,10 @@ async function main() {
     });
     const text = await res.text();
     if (!res.ok) throw new Error(`POST /api/runs ${res.status}: ${text}`);
-    return JSON.parse(text) as { runId: string; status: string; started?: number };
+    return JSON.parse(text) as { runId: string; status: string; existing?: boolean };
   });
-  log(`run ${post.value.runId} status=${post.value.status} started=${post.value.started ?? 0} (${post.ms} ms)`);
+  // 202 planning: the planner and the Computer starts run in the background, so the POST answers in seconds.
+  log(`run ${post.value.runId} status=${post.value.status}${post.value.existing ? " (existing run)" : ""} (${post.ms} ms)`);
   const runId = post.value.runId;
   if (post.value.status === "no_preview") {
     console.log("PASS  No preview. No test.");
@@ -119,6 +120,10 @@ async function main() {
 
     const allEnded = snapshot.missions.length > 0 && snapshot.missions.every((m) => END_STATES.has(m.status));
     if (allEnded && snapshot.run.status !== "running" && snapshot.run.status !== "reporting") break;
+    if (snapshot.run.status === "failed") {
+      log(`the run failed: ${snapshot.run.error ?? "(no error text)"}`);
+      break;
+    }
     if (Date.now() - t0 > RUN_LIMIT_MS + 60_000) {
       log("giving up: the run did not end one minute after the limit");
       break;

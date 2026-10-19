@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { KEPT_CAP_PER_RUN, decideTurn, followUpsFor, freeSlots, runIsComplete, shouldKeep } from "./decide";
+import {
+  KEPT_CAP_PER_RUN,
+  MAX_RUN_ERROR_CHARS,
+  PLANNING_TIMEOUT_ERROR,
+  PLANNING_TIMEOUT_MS,
+  RELEASE_GRACE_MS,
+  decideTurn,
+  followUpsFor,
+  freeSlots,
+  keptToRelease,
+  planningTimedOut,
+  releaseDelayMs,
+  runErrorText,
+  runIsComplete,
+  shouldKeep,
+} from "./decide";
 import { MISSION_BUDGET_MS } from "./pine";
 import { parseMissionResult } from "./pine";
 import { buildGoal } from "./goal";
@@ -154,4 +169,70 @@ test("buildGoal follows the plan section 6 template", () => {
   assert.match(goal, /1\. Total: expected "\$21\.60"/);
   assert.match(goal, /write result\.json/);
   assert.match(goal, /Name result\.json and fail\.png/);
+});
+
+test("planningTimedOut: a planning run older than 6 minutes timed out", () => {
+  const startedAt = new Date(t0).toISOString();
+  assert.equal(planningTimedOut({ status: "planning", started_at: startedAt }, t0 + PLANNING_TIMEOUT_MS + 1), true);
+  assert.equal(planningTimedOut({ status: "planning", started_at: startedAt }, t0 + PLANNING_TIMEOUT_MS), false);
+  assert.equal(planningTimedOut({ status: "planning", started_at: startedAt }, t0 + 60_000), false);
+  assert.match(PLANNING_TIMEOUT_ERROR, /6 minutes/);
+});
+
+test("planningTimedOut: only a planning run with a start time can time out", () => {
+  const late = t0 + PLANNING_TIMEOUT_MS * 10;
+  const startedAt = new Date(t0).toISOString();
+  for (const status of ["running", "reporting", "done", "failed", "no_preview"] as const) {
+    assert.equal(planningTimedOut({ status, started_at: startedAt }, late), false, status);
+  }
+  assert.equal(planningTimedOut({ status: "planning", started_at: null }, late), false);
+});
+
+test("runErrorText: prefix and message, cut at the limit", () => {
+  assert.equal(runErrorText("Planning failed", new Error("The planner reply did not validate.")), "Planning failed: The planner reply did not validate.");
+  assert.equal(runErrorText("Planning failed", "timeout"), "Planning failed: timeout");
+  assert.equal(runErrorText("Planning failed", new Error("  ")), "Planning failed: no message");
+  const long = runErrorText("Planning failed", new Error("x".repeat(2000)));
+  assert.equal(long.length, MAX_RUN_ERROR_CHARS);
+  assert.ok(long.startsWith("Planning failed: xxx"));
+  assert.ok(long.endsWith("..."));
+});
+
+test("keptToRelease: releases kept missions that no Bug finding names", () => {
+  const missions = [
+    { id: "bug-preview", kept: true },
+    { id: "possible-preview", kept: true },
+    { id: "old-bug-preview", kept: true },
+    { id: "needs-you", kept: true },
+    { id: "stopped", kept: false },
+  ];
+  const findings = [
+    { level: "bug" as const, mission_ids: ["bug-preview", "stopped"] },
+    { level: "possible" as const, mission_ids: ["possible-preview"] },
+    { level: "old_bug" as const, mission_ids: ["old-bug-preview"] },
+    { level: null, mission_ids: null },
+  ];
+  assert.deepEqual(
+    keptToRelease(missions, findings).map((m) => m.id),
+    ["possible-preview", "old-bug-preview", "needs-you"],
+  );
+});
+
+test("keptToRelease: releases every kept mission when there is no Bug, and nothing when none is kept", () => {
+  assert.deepEqual(keptToRelease([{ id: "a", kept: true }, { id: "b", kept: true }], []).map((m) => m.id), ["a", "b"]);
+  assert.deepEqual(keptToRelease([{ id: "a", kept: false }], [{ level: "possible", mission_ids: ["a"] }]), []);
+});
+
+test("releaseDelayMs: waits out the rest of the grace period after the mission ended", () => {
+  const endedAt = new Date(t0).toISOString();
+  assert.equal(releaseDelayMs(endedAt, t0), RELEASE_GRACE_MS);
+  assert.equal(releaseDelayMs(endedAt, t0 + 5_000), RELEASE_GRACE_MS - 5_000);
+  assert.equal(releaseDelayMs(endedAt, t0 + RELEASE_GRACE_MS), 0);
+  assert.equal(releaseDelayMs(endedAt, t0 + 60 * 60_000), 0);
+});
+
+test("releaseDelayMs: no wait without an end time, never more than the grace period", () => {
+  assert.equal(releaseDelayMs(null, t0), 0);
+  assert.equal(releaseDelayMs("not a date", t0), 0);
+  assert.equal(releaseDelayMs(new Date(t0 + 60_000).toISOString(), t0), RELEASE_GRACE_MS, "a clock skew does not wait longer");
 });
