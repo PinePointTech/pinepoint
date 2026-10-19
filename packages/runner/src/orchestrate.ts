@@ -50,9 +50,12 @@ import {
   collectStepShots,
 } from "./pine";
 import { dropStartLease, takeStartLease } from "./start-lease";
+import { runStartPool, type StartOutcome } from "./start-pool";
 
 /** The gap between two Computer creates, so one run does not trip the per-minute create limit (plan risk 5). */
 export const START_GAP_MS = 300;
+/** Computer starts that run at the same time. One start takes about 8 s, so 6 starts take about 16 s, not 50 s. */
+export const START_CONCURRENCY = 3;
 
 /** How long one status call waits for each running turn. */
 export const POLL_TIMEOUT_MS = 1000;
@@ -165,41 +168,44 @@ function isCapacityExceeded(err: unknown): boolean {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Starts the claimed missions one after another with a short gap. On CreateRateLimitedError the run
+ * Starts the claimed missions, START_CONCURRENCY at a time with a short gap. On CreateRateLimitedError the run
  * waits `retryAfterSeconds` and the rest go back to the queue. Returns how many started.
  */
 async function startClaimed(run: RunRow, claimed: MissionRow[]): Promise<number> {
-  let started = 0;
-  for (let i = 0; i < claimed.length; i += 1) {
-    const mission = claimed[i]!;
-    if (i > 0) await sleep(START_GAP_MS);
-    try {
-      const handle = await startMission({
-        missionId: mission.id,
-        persona: mission.persona ?? "Visitor",
-        lens: mission.lens ?? "Flow",
-        goal: mission.goal ?? "Open the page and read it.",
-        checks: mission.checks ?? [],
-        url: mission.url ?? run.preview_url ?? "",
-        qaMd: run.qa_md ?? "",
-        metadata: { runId: run.id, kind: mission.kind },
-      });
-      await saveHandle(mission.id, handle);
-      started += 1;
-    } catch (err) {
-      if (isRateLimited(err)) {
-        const seconds = Math.max(1, Math.ceil(err.retryAfterSeconds || 5));
-        await sql()`update runs set next_start_at = now() + make_interval(secs => ${seconds}) where id = ${run.id}`;
-        await Promise.all(claimed.slice(i).map((m) => requeue(m.id)));
-        break;
+  const { started, notLaunched } = await runStartPool(
+    claimed,
+    async (mission): Promise<StartOutcome> => {
+      try {
+        const handle = await startMission({
+          missionId: mission.id,
+          persona: mission.persona ?? "Visitor",
+          lens: mission.lens ?? "Flow",
+          goal: mission.goal ?? "Open the page and read it.",
+          checks: mission.checks ?? [],
+          url: mission.url ?? run.preview_url ?? "",
+          qaMd: run.qa_md ?? "",
+          metadata: { runId: run.id, kind: mission.kind },
+        });
+        await saveHandle(mission.id, handle);
+        return "started";
+      } catch (err) {
+        if (isRateLimited(err)) {
+          const seconds = Math.max(1, Math.ceil(err.retryAfterSeconds || 5));
+          await sql()`update runs set next_start_at = now() + make_interval(secs => ${seconds}) where id = ${run.id}`;
+          await requeue(mission.id);
+          return "stop";
+        }
+        if (isCapacityExceeded(err)) {
+          await requeue(mission.id);
+          return "stop";
+        }
+        await markError(mission.id, `Could not start the Computer: ${(err as Error).message}`);
+        return "failed";
       }
-      if (isCapacityExceeded(err)) {
-        await Promise.all(claimed.slice(i).map((m) => requeue(m.id)));
-        break;
-      }
-      await markError(mission.id, `Could not start the Computer: ${(err as Error).message}`);
-    }
-  }
+    },
+    { concurrency: START_CONCURRENCY, gapMs: START_GAP_MS },
+  );
+  await Promise.all(notLaunched.map((m) => requeue(m.id)));
   return started;
 }
 
