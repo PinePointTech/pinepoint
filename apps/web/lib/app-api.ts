@@ -16,19 +16,36 @@ export type ApiOptions = { fake?: boolean };
 
 class NotFound extends Error {}
 
+// A failed request. `runId` is set when POST /api/runs created the run before it failed.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly runId?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// The server's error text, else the status text, else "HTTP <status>".
+async function failure(res: Response): Promise<ApiError> {
+  let message = res.statusText ? `${res.status} ${res.statusText}` : `HTTP ${res.status}`;
+  let runId: string | undefined;
+  try {
+    const body = (await res.json()) as { error?: unknown; runId?: unknown };
+    if (typeof body.error === "string" && body.error.trim()) message = body.error;
+    if (typeof body.runId === "string") runId = body.runId;
+  } catch {
+    // The body is not JSON. Keep the status text.
+  }
+  return new ApiError(message, res.status, runId);
+}
+
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: "no-store", ...init });
   if (res.status === 404) throw new NotFound(url);
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // The body is not JSON. Keep the status text.
-    }
-    throw new Error(message);
-  }
+  if (!res.ok) throw await failure(res);
   return (await res.json()) as T;
 }
 
@@ -46,22 +63,36 @@ export async function listRuns(opts: ApiOptions = {}): Promise<WithFake<RunsResp
   }
 }
 
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// POST /api/runs. The route answers in a few seconds: 202 planning for a new run, or 200
+// with existing: true for a run of the same commit that is still going. Planning and the
+// Computer starts go on after the answer. A failure throws ApiError; its runId is set when
+// the run row exists, so the page can open the run anyway.
 export async function createRun(
   prUrl: string,
-  opts: ApiOptions = {},
-): Promise<CreateRunResponse & { fake: boolean }> {
-  const fake = (): CreateRunResponse & { fake: boolean } => {
+  opts: ApiOptions & { force?: boolean } = {},
+): Promise<WithFake<CreateRunResponse>> {
+  const fake = async (): Promise<WithFake<CreateRunResponse>> => {
+    // A short wait, so sample data shows the start card the way a real run does.
+    await wait(900);
     resetFakeClock();
-    return { runId: FAKE_RUN_ID, fake: true };
+    return { runId: FAKE_RUN_ID, status: "planning", existing: false, fake: true };
   };
   if (opts.fake) return fake();
   try {
-    const body = await getJson<CreateRunResponse>("/api/runs", {
+    const body = await getJson<Partial<CreateRunResponse>>("/api/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prUrl }),
+      body: JSON.stringify(opts.force ? { prUrl, force: true } : { prUrl }),
     });
-    return { ...body, fake: false };
+    if (typeof body.runId !== "string") throw new ApiError("The answer has no run id.", 200);
+    return {
+      runId: body.runId,
+      status: body.status ?? "planning",
+      existing: body.existing === true,
+      fake: false,
+    };
   } catch (err) {
     if (err instanceof NotFound) return fake();
     throw err;

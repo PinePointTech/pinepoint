@@ -1,26 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RotateCw } from "lucide-react";
 import { connectionFromDelegation, type DelegatedConnection } from "@pinesandbox/computer-web";
 import { PineDesktop } from "@pinesandbox/computer-web/react";
-import type { DesktopStatus } from "./types";
+import { LoadingScreen } from "./loading-screen";
+import type { DesktopPhase } from "./types";
 
 type Props = {
   missionId: string;
   control: "view" | "drive";
+  // True while the mission runs. Then a missing Computer is one that still starts.
+  running: boolean;
+  // The last known picture. It shows dimmed while the screen connects.
+  poster: string | null;
   onInput: () => void;
-  // "live" when the desktop connects. "ended" when the desktop request fails,
-  // the connection never becomes ready, or the reconnects stop.
-  onStatus: (status: Exclude<DesktopStatus, "starting">) => void;
+  onPhase: (phase: DesktopPhase) => void;
+  // The newest frame of the screen, as a JPEG data URL. Sent when the desktop goes away.
+  onLastFrame: (dataUrl: string) => void;
 };
 
-type State =
-  | { kind: "loading" }
-  | { kind: "error" }
-  | { kind: "ready"; url: string; token: string };
-
-// The desktop must connect in this time, or the panel shows the last screen.
-const READY_MS = 30_000;
+// While the Computer starts, ask again every 3 seconds, for at most 2 minutes.
+const RETRY_MS = 3000;
+const WAIT_MS = 2 * 60 * 1000;
+// The screen must connect in this time after the delegation, or the panel offers Try again.
+const CONNECT_MS = 45_000;
+const RECONNECTS = 5;
+// Keep the newest frame of the live screen this often.
+const FRAME_MS = 3000;
 
 // The desktop route can send the delegation as the body or as { delegation }.
 function readDelegation(body: unknown): DelegatedConnection | null {
@@ -40,79 +47,194 @@ function readToken(body: unknown): string | null {
   return readDelegation(body)?.transports.desktop_token.token ?? null;
 }
 
-export default function LiveDesktop({ missionId, control, onInput, onStatus }: Props) {
-  const [state, setState] = useState<State>({ kind: "loading" });
+// Seconds from a Retry-After header or a { retryAfter } body, else null.
+function retryAfterMs(res: Response, body: unknown): number | null {
+  const header = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return header * 1000;
+  const fromBody = Number((body as { retryAfter?: unknown } | null)?.retryAfter);
+  return Number.isFinite(fromBody) && fromBody > 0 ? fromBody * 1000 : null;
+}
 
-  // Keep the latest callback without restarting the effects below.
-  const statusRef = useRef(onStatus);
+// 410 computer_stopped: the Computer is gone and will not come back.
+function isGone(status: number, body: unknown): boolean {
+  return status === 410 || (body as { code?: unknown } | null)?.code === "computer_stopped";
+}
+
+export default function LiveDesktop({ missionId, control, running, poster, onInput, onPhase, onLastFrame }: Props) {
+  // A new attempt (Try again) asks for the desktop from the start.
+  const [attempt, setAttempt] = useState(0);
+  const [conn, setConn] = useState<{ url: string; token: string } | null>(null);
+  const [phase, setPhase] = useState<DesktopPhase>("waiting");
+  const [reconnect, setReconnect] = useState(0);
+  const [since, setSince] = useState(() => Date.now());
+
+  // Keep the latest props without restarting the effects below.
+  const runningRef = useRef(running);
+  const phaseRef = useRef(onPhase);
+  const lastFrameRef = useRef(onLastFrame);
   useEffect(() => {
-    statusRef.current = onStatus;
-  }, [onStatus]);
+    runningRef.current = running;
+    phaseRef.current = onPhase;
+    lastFrameRef.current = onLastFrame;
+  }, [running, onPhase, onLastFrame]);
 
-  const connected = useRef(false);
-  const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearReadyTimer = useCallback(() => {
-    if (readyTimer.current) clearTimeout(readyTimer.current);
-    readyTimer.current = null;
-  }, []);
+  const wasLive = useRef(false);
+  const phaseNow = useRef(phase);
+  const frame = useRef<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // The start of this try (the mount or the last Try again) and of its first connect.
+  // An automatic retry keeps both, so the 2 minute and 45 second limits count the whole try.
+  const tryStart = useRef(Date.now());
+  const connectStart = useRef<number | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const end = useCallback(() => {
-    clearReadyTimer();
-    statusRef.current("ended");
-  }, [clearReadyTimer]);
+  useEffect(() => {
+    phaseNow.current = phase;
+    phaseRef.current(phase);
+    if (phase === "gone" && frame.current) lastFrameRef.current(frame.current);
+  }, [phase]);
 
+  // Ask for the desktop. A Computer that still starts answers 404, 409 or 429: wait and ask again.
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
-    connected.current = false;
+    const started = tryStart.current;
+    setConn(null);
+    setPhase("waiting");
+    setReconnect(0);
+    setSince(started);
 
-    // No Pine computer, or a computer that does not answer: stop waiting.
-    readyTimer.current = setTimeout(() => {
-      if (live && !connected.current) {
-        abort.abort();
-        statusRef.current("ended");
+    const later = (ms: number) => {
+      if (Date.now() - started + ms > WAIT_MS) {
+        setPhase("stalled");
+        return;
       }
-    }, READY_MS);
+      timer = setTimeout(ask, ms);
+    };
 
-    (async () => {
+    async function ask() {
+      let res: Response;
       try {
-        const res = await fetch(`/api/missions/${encodeURIComponent(missionId)}/desktop`, {
+        res = await fetch(`/api/missions/${encodeURIComponent(missionId)}/desktop`, {
           method: "POST",
           signal: abort.signal,
         });
-        if (!res.ok) throw new Error(String(res.status));
-        const delegation = readDelegation(await res.json());
-        if (!delegation) throw new Error("bad delegation");
-        const conn = connectionFromDelegation(delegation);
-        if (live) setState({ kind: "ready", url: conn.url, token: conn.token });
       } catch {
-        if (!live) return;
-        setState({ kind: "error" });
-        end();
+        if (live) later(RETRY_MS);
+        return;
       }
-    })();
+      if (!live) return;
+      const body: unknown = await res.json().catch(() => null);
+      if (!live) return;
+      if (res.ok) {
+        const delegation = readDelegation(body);
+        let c: { url: string; token: string } | null = null;
+        try {
+          c = delegation ? connectionFromDelegation(delegation) : null;
+        } catch {
+          // A delegation the SDK cannot read. Ask again.
+        }
+        if (c) {
+          connectStart.current ??= Date.now();
+          setConn({ url: c.url, token: c.token });
+          setPhase("connecting");
+          return;
+        }
+        later(RETRY_MS);
+        return;
+      }
+      if (isGone(res.status, body)) {
+        setPhase("gone");
+        return;
+      }
+      // No handle and the mission no longer runs: there is no Computer to wait for.
+      if (res.status === 404 && !runningRef.current) {
+        setPhase("gone");
+        return;
+      }
+      later(Math.max(RETRY_MS, retryAfterMs(res, body) ?? 0));
+    }
 
+    void ask();
     return () => {
       live = false;
       abort.abort();
-      clearReadyTimer();
+      if (timer) clearTimeout(timer);
     };
-  }, [missionId, end, clearReadyTimer]);
+  }, [missionId, attempt]);
+
+  // The screen must connect in 45 seconds from the first connect of this try. A late connect
+  // still turns the screen live.
+  useEffect(() => {
+    if (phase !== "connecting") return;
+    const left = (connectStart.current ?? Date.now()) + CONNECT_MS - Date.now();
+    const t = setTimeout(() => setPhase((p) => (p === "connecting" ? "stalled" : p)), Math.max(0, left));
+    return () => clearTimeout(t);
+  }, [phase, attempt]);
+
+  useEffect(
+    () => () => {
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    },
+    [],
+  );
+
+  const tryAgain = useCallback(() => {
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    tryStart.current = Date.now();
+    connectStart.current = null;
+    setAttempt((n) => n + 1);
+  }, []);
+
+  // While live, keep the newest frame of the screen. The SDK replaces the canvas on reconnect.
+  useEffect(() => {
+    if (phase !== "live") return;
+    const grab = () => {
+      try {
+        const el = box.current?.querySelector("pine-desktop") ?? document.querySelector("pine-desktop");
+        const canvas = el?.shadowRoot?.querySelector<HTMLCanvasElement>('[part="screen"] canvas');
+        if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+        frame.current = canvas.toDataURL("image/jpeg", 0.7);
+      } catch {
+        // The canvas is gone or cannot be read. Keep the frame from before.
+      }
+    };
+    const first = setTimeout(grab, 1000);
+    const t = setInterval(grab, FRAME_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [phase]);
+
+  // The panel shows the last screen after the desktop. Give it the newest frame.
+  useEffect(
+    () => () => {
+      if (frame.current) lastFrameRef.current(frame.current);
+    },
+    [],
+  );
 
   // A desktop token lasts 120 seconds. The SDK calls this on each reconnect.
   const getToken = useCallback(async () => {
     const res = await fetch(`/api/missions/${encodeURIComponent(missionId)}/desktop-token`, {
       method: "POST",
     });
+    const body: unknown = await res.json().catch(() => null);
+    if (isGone(res.status, body)) {
+      setPhase("gone");
+      throw new Error("computer_stopped");
+    }
     if (!res.ok) throw new Error(String(res.status));
-    const token = readToken(await res.json());
+    const token = readToken(body);
     if (!token) throw new Error("bad token");
     return token;
   }, [missionId]);
 
   // The first connect uses the token from the delegation. Reconnects get a new token.
   const tokenSource = useMemo(() => {
-    let first: string | null = state.kind === "ready" ? state.token : null;
+    let first: string | null = conn?.token ?? null;
     return () => {
       if (first) {
         const t = first;
@@ -121,45 +243,101 @@ export default function LiveDesktop({ missionId, control, onInput, onStatus }: P
       }
       return getToken();
     };
-  }, [state, getToken]);
+  }, [conn, getToken]);
 
   const handleConnected = useCallback(() => {
-    connected.current = true;
-    clearReadyTimer();
-    statusRef.current("live");
-  }, [clearReadyTimer]);
+    wasLive.current = true;
+    setReconnect(0);
+    setPhase("live");
+  }, []);
 
-  // The parent shows the last screen when the desktop fails.
-  if (state.kind === "error") return null;
+  // A live screen that drops starts the reconnect clock. A connect that fails keeps its clock.
+  const handleDisconnected = useCallback(() => {
+    if (phaseNow.current !== "live") return;
+    setPhase("reconnecting");
+    setSince(Date.now());
+  }, []);
 
-  if (state.kind === "loading") {
-    return (
-      <div
-        className="flex aspect-video w-full items-center justify-center rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted"
-        aria-busy="true"
-      >
-        The desktop is starting.
-      </div>
-    );
-  }
+  const handleReconnecting = useCallback(({ attempt: n }: { attempt: number }) => {
+    setReconnect(n);
+    setPhase((p) => (p === "gone" || p === "stalled" ? p : wasLive.current ? "reconnecting" : "connecting"));
+  }, []);
+
+  // After a live screen, the Computer is gone. Before it, the screen service can still be
+  // starting: ask for a new delegation in 3 seconds, until the 45 seconds are over.
+  const handleExhausted = useCallback(() => {
+    if (wasLive.current) {
+      setPhase("gone");
+      return;
+    }
+    if (Date.now() - (connectStart.current ?? Date.now()) >= CONNECT_MS) {
+      setPhase("stalled");
+      return;
+    }
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    retryTimer.current = setTimeout(() => setAttempt((n) => n + 1), RETRY_MS);
+  }, []);
+
+  const stage =
+    phase === "waiting"
+      ? "Waiting for the computer"
+      : phase === "reconnecting"
+        ? reconnect > 0
+          ? `Reconnecting, attempt ${reconnect} of ${RECONNECTS}`
+          : "Reconnecting"
+        : phase === "stalled"
+          ? "The screen did not connect."
+          : // Before the first live screen the panel retries by itself, so it shows no count.
+            "Connecting to the screen";
+
+  const showOverlay = phase !== "live";
 
   return (
     <div
-      className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black"
+      ref={box}
+      className="relative aspect-video min-h-52 w-full overflow-hidden rounded-2xl bg-black"
       onPointerDown={onInput}
       onKeyDown={onInput}
       onWheel={onInput}
+      data-desktop-phase={phase}
     >
-      <PineDesktop
-        url={state.url}
-        token={tokenSource}
-        control={control}
-        reconnectMaxAttempts={5}
-        onConnected={handleConnected}
-        onReconnectExhausted={end}
-        onError={() => undefined}
-        style={{ width: "100%", height: "100%" }}
-      />
+      {conn && phase !== "gone" && (
+        <PineDesktop
+          key={attempt}
+          url={conn.url}
+          token={tokenSource}
+          control={control}
+          reconnectMaxAttempts={RECONNECTS}
+          onConnected={handleConnected}
+          onDisconnected={handleDisconnected}
+          onReconnecting={handleReconnecting}
+          onReconnectExhausted={handleExhausted}
+          onError={() => undefined}
+          style={{ width: "100%", height: "100%" }}
+        />
+      )}
+      {showOverlay && (
+        <LoadingScreen
+          overlay
+          stage={stage}
+          since={since}
+          poster={poster}
+          busy={phase !== "stalled" && phase !== "gone"}
+          detail={phase === "waiting" ? "The computer is still starting. This can take a minute." : null}
+          action={
+            phase === "stalled" ? (
+              <button
+                type="button"
+                onClick={tryAgain}
+                className="inline-flex min-h-11 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                <RotateCw className="h-4 w-4" aria-hidden />
+                Try again
+              </button>
+            ) : null
+          }
+        />
+      )}
     </div>
   );
 }

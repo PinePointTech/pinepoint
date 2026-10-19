@@ -36,6 +36,10 @@ export interface Run {
   cost_usd: number | string | null;
   started_at: string | null;
   finished_at: string | null;
+  // Set when Pine rate limited a Computer create. No start happens before this time.
+  next_start_at?: string | null;
+  // Why the run failed. Null otherwise.
+  error?: string | null;
 }
 
 // A missions row without pine_enc. The API never sends pine_enc.
@@ -56,6 +60,11 @@ export interface Mission {
   result: unknown;
   screenshot_url: string | null;
   usage: unknown;
+  // True when the mission has a Pine Computer handle (pine_enc is set). A running
+  // mission with false is still waiting for its Computer to start.
+  has_computer?: boolean;
+  // True when the Computer stays on after the mission ends (a failed preview or needs_you).
+  kept?: boolean;
   started_at: string | null;
   finished_at: string | null;
 }
@@ -112,12 +121,18 @@ export interface RunsResponse {
   runs: Run[];
 }
 
-// POST /api/runs with { prUrl }
+// POST /api/runs with { prUrl }. The route answers in a few seconds: 202 with status
+// "planning" for a new run, 200 with existing: true for a run of the same commit that is
+// still going, 200 with status "no_preview" when the PR has no preview.
 export interface CreateRunRequest {
   prUrl: string;
+  previewUrl?: string;
+  force?: boolean;
 }
 export interface CreateRunResponse {
   runId: string;
+  status: RunStatus;
+  existing: boolean;
 }
 
 export const TERMINAL_RUN_STATUSES: RunStatus[] = [

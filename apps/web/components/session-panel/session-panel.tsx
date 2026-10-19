@@ -2,17 +2,75 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Check, ExternalLink, Hand, Maximize2, Minimize2, MonitorOff, Wrench, X } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ExternalLink,
+  Expand,
+  Hand,
+  ImageOff,
+  Maximize2,
+  Minimize2,
+  MonitorOff,
+  Wrench,
+  X,
+} from "lucide-react";
+import type { MissionStatus } from "@/lib/app-types";
 import { FAKE_COUPON_FIX, FAKE_FIX_COMMENT_URL } from "@/lib/fake-status";
-import type { Decision, DesktopStatus, FindingView, Fix, SessionPanelProps, StepShotView, StoredFix } from "./types";
+import { ImageViewer, type ViewerItem } from "./image-viewer";
+import { LoadingScreen } from "./loading-screen";
+import type {
+  Decision,
+  DesktopPhase,
+  FailedCheckView,
+  FindingView,
+  Fix,
+  SessionPanelProps,
+  StepShotView,
+  StoredFix,
+} from "./types";
 
 // The desktop SDK uses browser APIs. Load it only in the browser.
 const LiveDesktop = dynamic(() => import("./live-desktop"), {
   ssr: false,
-  loading: () => <SoftBox text="The desktop is starting." />,
+  loading: () => <LoadingScreen stage="Connecting to the screen" since={Date.now()} />,
 });
 
 const IDLE_MS = 15 * 60 * 1000;
+// A kept Computer stays on for one day (its idle timeout).
+const KEPT_MS = 24 * 60 * 60 * 1000;
+
+// Why the panel shows the last screen instead of a live desktop.
+type LastReason = "ended" | "gone" | "not_started" | "no_computer" | "sample";
+
+// What the screen area shows. Only "live" asks the desktop route for a Computer.
+type Screen = { kind: "queued" } | { kind: "starting" } | { kind: "live" } | { kind: "last"; reason: LastReason };
+
+function screenFor(
+  p: {
+    status?: MissionStatus;
+    kept?: boolean;
+    hasComputer?: boolean;
+    finishedAt?: string | null;
+    fake: boolean;
+  },
+  gone: boolean,
+  now: number,
+): Screen {
+  if (p.status === "queued") return { kind: "queued" };
+  if (p.status === "running" && p.hasComputer === false) return { kind: "starting" };
+  if (p.fake) return { kind: "last", reason: "sample" };
+  // A Computer that stopped when its user finished reads as the end of the mission.
+  if (gone) return { kind: "last", reason: p.finishedAt ? "ended" : "gone" };
+  if (p.hasComputer !== false) {
+    // No status: an older caller. Ask for the desktop, as before.
+    if (p.status === undefined || p.status === "running" || p.status === "needs_you") return { kind: "live" };
+    const end = p.finishedAt ? Date.parse(p.finishedAt) : NaN;
+    if (p.kept && (!Number.isFinite(end) || now - end < KEPT_MS)) return { kind: "live" };
+  }
+  if (p.hasComputer === false) return { kind: "last", reason: p.finishedAt ? "no_computer" : "not_started" };
+  return { kind: "last", reason: "ended" };
+}
 
 const LEVEL_TEXT: Record<FindingView["level"], string> = {
   bug: "Bug",
@@ -66,10 +124,25 @@ export function SessionPanel({
   finding,
   lastScreenshotUrl,
   steps = [],
+  missionStatus,
+  kept,
+  hasComputer,
+  startedAt = null,
+  finishedAt = null,
+  nextStartAt = null,
+  reason = null,
+  failedChecks = [],
+  note = null,
   onClose,
   fake = false,
 }: SessionPanelProps) {
-  const [desktop, setDesktop] = useState<DesktopStatus>("starting");
+  const [phase, setPhase] = useState<DesktopPhase>("waiting");
+  // The desktop said the Computer is gone. The panel shows the last screen from then on.
+  const [gone, setGone] = useState(false);
+  // The newest frame of the live screen. The last screen shows it first.
+  const [lastFrame, setLastFrame] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number; label: string } | null>(null);
+  const [openedAt] = useState(() => Date.now());
   const [control, setControl] = useState<"view" | "drive">("view");
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -168,14 +241,22 @@ export function SessionPanel({
 
   // A new mission asks for its own desktop.
   useEffect(() => {
-    setDesktop("starting");
+    setPhase("waiting");
+    setGone(false);
+    setLastFrame(null);
     setControl("view");
     setControlError(null);
   }, [missionId]);
 
-  // Sample data has no Pine computer. A failed or stopped desktop has no live view.
-  const live = !fake && desktop === "live";
-  const ended = fake || desktop === "ended";
+  // The mission row decides the screen area. Queued and starting missions get a loading card
+  // and no desktop request. An ended mission that keeps no Computer shows its last screen.
+  const screen = screenFor({ status: missionStatus, kept, hasComputer, finishedAt, fake }, gone, Date.now());
+  const live = screen.kind === "live" && phase === "live";
+
+  // Nobody can drive a desktop that is not live.
+  useEffect(() => {
+    if (!live) setControl("view");
+  }, [live]);
 
   // Control returns to the agent after 15 minutes without input.
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -199,11 +280,10 @@ export function SessionPanel({
     if (control === "drive") armIdle();
   }, [control, armIdle]);
 
-  const onDesktopStatus = useCallback((status: "live" | "ended") => {
-    setDesktop(status);
-    if (status === "ended") {
-      // Nobody can drive a desktop that is gone.
-      setControl("view");
+  const onDesktopPhase = useCallback((next: DesktopPhase) => {
+    setPhase(next);
+    if (next === "gone") {
+      setGone(true);
       setControlError(null);
     }
   }, []);
@@ -258,7 +338,14 @@ export function SessionPanel({
   }
 
   const driving = control === "drive";
-  const lastScreen = lastScreenshotUrl ?? finding?.screenshot_url ?? null;
+  const missionShot = lastScreenshotUrl ?? null;
+  const findingShot = finding?.screenshot_url ?? null;
+  const poster = lastFrame ?? missionShot ?? findingShot;
+  const bugShot = findingShot ?? missionShot;
+  const pending = missionStatus === "queued" || missionStatus === "running";
+  const startedMs = startedAt ? Date.parse(startedAt) : NaN;
+
+  const openViewer = (items: ViewerItem[], start: number, label: string) => setViewer({ items, start, label });
 
   return (
     <section
@@ -291,19 +378,50 @@ export function SessionPanel({
       </header>
 
       <FullScreenFrame>
-        {ended ? (
-          <LastScreen url={lastScreen} />
-        ) : (
+        {screen.kind === "queued" ? (
+          <LoadingScreen
+            stage="Waiting for a free computer."
+            detail="This user starts when Pine has a computer for it."
+            since={openedAt}
+            nextStartAt={nextStartAt}
+            poster={poster}
+          />
+        ) : screen.kind === "starting" ? (
+          <LoadingScreen
+            stage="Starting the computer."
+            detail="Pine starts each computer in about 8 seconds, one after another."
+            since={Number.isFinite(startedMs) ? startedMs : openedAt}
+            nextStartAt={nextStartAt}
+            poster={poster}
+          />
+        ) : screen.kind === "live" ? (
           <LiveDesktop
+            // A Computer that just started gets a fresh desktop request.
+            key={String(hasComputer)}
             missionId={missionId}
             control={control}
+            running={missionStatus === undefined || missionStatus === "running"}
+            poster={poster}
             onInput={onInput}
-            onStatus={onDesktopStatus}
+            onPhase={onDesktopPhase}
+            onLastFrame={setLastFrame}
+          />
+        ) : (
+          <LastScreen
+            urls={[lastFrame, missionShot, findingShot]}
+            reason={screen.reason}
+            onOpen={(url) =>
+              openViewer([{ url, title: "Last screen", at: finishedAt }], 0, "Last screen")
+            }
           />
         )}
       </FullScreenFrame>
 
-      {steps.length > 0 && <StepShots steps={steps} />}
+      <StepShots
+        steps={steps}
+        pending={pending}
+        onOpen={(i) => openViewer(steps, i, "Pictures of each step")}
+      />
 
       {live && (
         <div className="flex flex-col gap-1">
@@ -376,6 +494,14 @@ export function SessionPanel({
               />
             )}
           </div>
+
+          {bugShot && (
+            <BugScreen
+              url={bugShot}
+              title={finding.title}
+              onOpen={() => openViewer([{ url: bugShot, title: finding.title, at: finishedAt }], 0, "Bug screen")}
+            />
+          )}
 
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-3 @md:flex-row">
@@ -495,11 +621,64 @@ export function SessionPanel({
           )}
         </>
       ) : (
-        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-muted">
-          This mission has no finding.
-        </p>
+        <NoFinding status={missionStatus} note={note} reason={reason} failedChecks={failedChecks} />
+      )}
+
+      {viewer && (
+        <ImageViewer
+          items={viewer.items}
+          start={viewer.start}
+          label={viewer.label}
+          onClose={() => setViewer(null)}
+        />
       )}
     </section>
+  );
+}
+
+const NO_FINDING_TEXT: Partial<Record<MissionStatus, string>> = {
+  queued: "This user has not started yet. A finding shows here when a check fails.",
+  running: "This user is still testing. A finding shows here when a check fails.",
+  passed: "Every check passed. There is no finding.",
+  failed: "A check failed. There is no finding for it yet.",
+  blocked: "This user could not finish. There is no finding.",
+  error: "This user could not run. There is no finding.",
+  needs_you: "The agent needs help. Take control to help it.",
+};
+
+// A mission with no finding: what it did, why it stopped, and the checks that failed.
+function NoFinding({
+  status,
+  note,
+  reason,
+  failedChecks,
+}: {
+  status?: MissionStatus;
+  note: string | null;
+  reason: string | null;
+  failedChecks: FailedCheckView[];
+}) {
+  return (
+    <div className="flex flex-col gap-3" data-testid="no-finding">
+      <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-muted">
+        {note ?? (status && NO_FINDING_TEXT[status]) ?? "This mission has no finding."}
+      </p>
+      {reason && <Tile label="Reason" text={reason} tone="plain" />}
+      {failedChecks.length > 0 && (
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <h3 className="mb-3 text-sm font-semibold">Checks that failed</h3>
+          <ul role="list" className="flex list-none flex-col gap-3 text-sm">
+            {failedChecks.map((c, i) => (
+              <li key={i} className="flex flex-col gap-0.5 break-words">
+                <span className="font-medium">{c.name}</span>
+                {c.expected && <span className="text-muted">Expected: {c.expected}</span>}
+                {c.saw && <span className="text-muted">Saw: {c.saw}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -519,14 +698,6 @@ function FixCard({ stored, fix: f }: { stored: StoredFix; fix: Fix }) {
       <p className="text-xs text-muted">
         Confidence: {f.confidence}. Model: {stored.model}.
       </p>
-    </div>
-  );
-}
-
-function SoftBox({ text }: { text: string }) {
-  return (
-    <div className="flex aspect-video w-full items-center justify-center rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted">
-      {text}
     </div>
   );
 }
@@ -617,69 +788,195 @@ function FullScreenFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Pine's picture of the screen after each step. Each one links to the full image in Vercel Blob.
-function StepShots({ steps }: { steps: StepShotView[] }) {
+function shotTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.toLocaleTimeString("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  })} PT`;
+}
+
+// One step picture. A picture that does not load shows an icon, never a broken image.
+function StepThumb({ step, onOpen }: { step: StepShotView; onOpen: () => void }) {
+  const [broken, setBroken] = useState(false);
+  const time = shotTime(step.at);
   return (
-    <section aria-labelledby="step-shots-title" className="flex flex-col gap-2">
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`group flex w-full flex-col gap-1.5 rounded-2xl text-left ${FOCUS}`}
+    >
+      {broken ? (
+        <span className="flex aspect-video w-full items-center justify-center rounded-xl border border-border bg-surface-2 text-muted">
+          <ImageOff className="h-5 w-5" aria-hidden />
+        </span>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={step.url}
+          alt=""
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="aspect-video w-full rounded-xl border border-border bg-surface-2 object-cover object-top transition-[filter] group-hover:brightness-95"
+        />
+      )}
+      <span className="flex flex-col text-xs text-muted group-hover:text-fg">
+        <span className="font-medium break-words text-fg">{step.title || "Picture"}</span>
+        {time && <span className="tabular-nums">{time}</span>}
+        <span className="sr-only"> (opens the picture viewer)</span>
+      </span>
+    </button>
+  );
+}
+
+// Pine's picture of the screen after each step. Each one opens the picture viewer. The titles
+// are Pine's step titles, so they are not numbered like the text steps.
+function StepShots({
+  steps,
+  pending,
+  onOpen,
+}: {
+  steps: StepShotView[];
+  pending: boolean;
+  onOpen: (index: number) => void;
+}) {
+  return (
+    <section aria-labelledby="step-shots-title" className="flex flex-col gap-2" data-testid="step-shots">
       <h3 id="step-shots-title" className="text-sm font-semibold">
-        Screens at each step
+        Pictures of each step
       </h3>
-      <ol className="grid grid-cols-2 gap-3 @md:grid-cols-3">
-        {steps.map((step, i) => (
-          <li key={step.url} className="min-w-0">
-            <a
-              href={step.url}
-              target="_blank"
-              rel="noreferrer"
-              className={`group flex flex-col gap-1.5 rounded-2xl ${FOCUS}`}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={step.url}
-                alt=""
-                loading="lazy"
-                className="aspect-video w-full rounded-xl border border-border bg-surface-2 object-cover object-top transition-[filter] group-hover:brightness-95"
-              />
-              <span className="text-xs text-muted group-hover:text-fg">
-                <span className="font-medium text-fg">Step {i + 1}</span>
-                {step.title ? `. ${step.title}` : ""}
-                <span className="sr-only"> (opens the full picture in a new tab)</span>
-              </span>
-            </a>
-          </li>
-        ))}
-      </ol>
+      {steps.length > 0 ? (
+        <ol role="list" className="grid list-none grid-cols-2 gap-3 @md:grid-cols-3">
+          {steps.map((step, i) => (
+            <li key={`${i}-${step.url}`} className="min-w-0">
+              <StepThumb step={step} onOpen={() => onOpen(i)} />
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-muted">
+          {pending
+            ? "Pictures of each step appear when this user finishes."
+            : "PinePoint has no pictures of the steps for this user."}
+        </p>
+      )}
     </section>
   );
 }
 
-// The panel shows the last screen when there is no live desktop.
-function LastScreen({ url }: { url: string | null }) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [url]);
+const LAST_CAPTION: Record<LastReason, string> = {
+  ended: "The computer stopped when this user finished. This is the last screen.",
+  gone: "The computer stopped. This is the last screen.",
+  not_started: "The computer has not started yet.",
+  no_computer: "The computer did not start for this user.",
+  sample: "Sample data has no live computer. This is the last screen.",
+};
 
-  if (!url || broken) {
+const NO_PICTURE: Record<LastReason, string> = {
+  ended: "The computer stopped when this user finished. There is no picture of the last screen.",
+  gone: "The computer stopped. There is no picture of the last screen.",
+  not_started: "The computer has not started yet.",
+  no_computer: "The computer did not start for this user.",
+  sample: "Sample data has no live computer.",
+};
+
+// The panel shows the last screen when there is no live desktop. It uses the first picture
+// that loads: the last frame of the live screen, the mission screenshot, the finding screenshot.
+function LastScreen({
+  urls,
+  reason,
+  onOpen,
+}: {
+  urls: Array<string | null>;
+  reason: LastReason;
+  onOpen: (url: string) => void;
+}) {
+  const [broken, setBroken] = useState<string[]>([]);
+  const url = urls.find((u): u is string => !!u && !broken.includes(u)) ?? null;
+
+  if (!url) {
     return (
-      <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted">
+      <div
+        className="flex aspect-video min-h-52 w-full flex-col items-center justify-center gap-2 rounded-2xl bg-surface-2 px-4 text-center text-sm text-muted"
+        data-testid="last-screen"
+      >
         <MonitorOff className="h-5 w-5" aria-hidden />
-        No live computer for this mission.
+        {NO_PICTURE[reason]}
       </div>
     );
   }
 
   return (
-    <figure className="flex flex-col gap-2">
-      <figcaption className="flex w-fit items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-muted">
-        <MonitorOff className="h-3.5 w-3.5" aria-hidden />
-        Live session ended. This is the last screen.
+    <figure className="flex flex-col gap-2" data-testid="last-screen">
+      <figcaption className="flex w-fit max-w-full items-center gap-2 rounded-2xl border border-border bg-surface px-3 py-1 text-xs font-medium text-muted">
+        <MonitorOff className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {LAST_CAPTION[reason]}
       </figcaption>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt="Last screen of the mission computer"
-        onError={() => setBroken(true)}
-        className="aspect-video w-full rounded-2xl bg-surface-2 object-contain"
-      />
+      <button
+        type="button"
+        onClick={() => onOpen(url)}
+        aria-label="Expand the last screen"
+        className={`group relative block w-full overflow-hidden rounded-2xl ${FOCUS}`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt="Last screen of the mission computer"
+          onError={() => setBroken((b) => [...b, url])}
+          className="aspect-video w-full bg-surface-2 object-contain"
+        />
+        <ExpandHint />
+      </button>
+    </figure>
+  );
+}
+
+function ExpandHint() {
+  return (
+    <span
+      aria-hidden
+      className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs font-medium text-fg opacity-90 transition-opacity group-hover:opacity-100"
+    >
+      <Expand className="h-3.5 w-3.5" />
+      Expand
+    </span>
+  );
+}
+
+// The screen when the check failed. It shows whatever the desktop does, so the bug is always
+// in view, and it opens in the picture viewer.
+function BugScreen({ url, title, onOpen }: { url: string; title: string; onOpen: () => void }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <figure className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-3" data-testid="bug-screen">
+      <figcaption className="px-1 text-sm font-semibold">Bug screen</figcaption>
+      {broken ? (
+        <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl bg-surface-2 px-4 text-center text-sm text-muted">
+          <ImageOff className="h-5 w-5" aria-hidden />
+          The bug picture did not load.
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`Expand the bug screen: ${title}`}
+          className={`group relative block w-full overflow-hidden rounded-xl ${FOCUS}`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={`The screen for: ${title}`}
+            loading="lazy"
+            onError={() => setBroken(true)}
+            className="aspect-video w-full bg-surface-2 object-contain"
+          />
+          <ExpandHint />
+        </button>
+      )}
     </figure>
   );
 }
