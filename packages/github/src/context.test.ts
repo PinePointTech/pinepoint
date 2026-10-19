@@ -131,7 +131,18 @@ test("getPrContext returns qaMd null on 404 and fills content", async () => {
       get: async (args: { mediaType?: { format: string } }) =>
         args.mediaType?.format === "diff"
           ? { data: "diff --git a/x b/x\n+line\n" }
-          : { data: { title: "T", head: { sha: "abc" }, user: { login: "vi" } } },
+          : {
+              data: {
+                number: 7,
+                title: "T",
+                state: "open",
+                draft: false,
+                html_url: "https://github.com/o/r/pull/7",
+                head: { sha: "abc", ref: "feature", repo: { id: 1 } },
+                base: { sha: "base", repo: { id: 1 } },
+                user: { login: "vi" },
+              },
+            },
       listFiles: async () => ({
         data: [
           { filename: "apps/demo-store/lib/cart.ts", status: "modified", additions: 1, deletions: 0 },
@@ -159,6 +170,51 @@ test("getPrContext returns qaMd null on 404 and fills content", async () => {
   assert.equal(ctx.url, "https://github.com/o/r/pull/7");
   assert.equal(ctx.changedFiles[0]?.content, "export const x = 1;\n");
   assert.equal(ctx.changedFiles[1]?.content, undefined);
+  assert.equal(ctx.isFork, false);
+  // Not a fork: the QA file is read at the head.
+  assert.equal(ctx.qaRef, "abc");
+});
+
+test("getPrContext reads the QA file at the base for a PR from a fork and honors the configured path", async () => {
+  const reads: string[] = [];
+  const gh = {
+    pulls: {
+      get: async (args: { mediaType?: { format: string } }) =>
+        args.mediaType?.format === "diff"
+          ? { data: "diff --git a/x b/x\n+line\n" }
+          : {
+              data: {
+                number: 8,
+                title: "T",
+                state: "open",
+                draft: false,
+                html_url: "https://github.com/o/r/pull/8",
+                head: { sha: "forkhead", ref: "feature", repo: { id: 999 } },
+                base: { sha: "basesha", repo: { id: 1 } },
+                user: { login: "ext" },
+              },
+            },
+      listFiles: async () => ({ data: [] }),
+    },
+    repos: {
+      getContent: async ({ path, ref }: { path: string; ref: string }) => {
+        reads.push(`${ref}:${path}`);
+        if (path === "docs/qa.md" && ref === "basesha") return { data: { type: "file", content: Buffer.from("# QA\n").toString("base64") } };
+        throw notFound();
+      },
+      listDeployments: async () => ({ data: [] }),
+      listDeploymentStatuses: async () => ({ data: [] }),
+      getCombinedStatusForRef: async () => ({ data: { statuses: [] } }),
+    },
+  } as unknown as Octokit;
+
+  const ctx = await getPrContext("https://github.com/o/r/pull/8", gh, { qaMdPath: "docs/qa.md", previewProjectName: null, productionUrl: "https://prod.example" });
+  assert.equal(ctx.isFork, true);
+  assert.equal(ctx.qaRef, "basesha");
+  assert.equal(ctx.qaMd, "# QA\n");
+  assert.equal(ctx.productionUrl, "https://prod.example");
+  assert.ok(reads.includes("basesha:docs/qa.md"));
+  assert.ok(!reads.some((r) => r.startsWith("forkhead:")), "nothing is read from the fork's head");
 });
 
 test("postNoPreviewComment posts the exact body", async () => {

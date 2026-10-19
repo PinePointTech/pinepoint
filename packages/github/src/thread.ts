@@ -1,16 +1,18 @@
 // Replies in a finding's review comment thread (plan sections 7 and 9.4).
 
-import { octokit, type PrRef } from "./client";
+import type { Octokit } from "@octokit/rest";
+import type { PrRef } from "./client";
 
 export type Decision = "bug" | "not_bug";
 
-/** Posts a reply under a PR review comment. Returns the new comment id and URL. */
+/** Posts a reply under a PR review comment as `gh`. Returns the new comment id and URL. */
 export async function replyInThread(
+  gh: Octokit,
   ref: PrRef,
   commentId: number,
   body: string,
 ): Promise<{ id: number; url: string }> {
-  const { data } = await octokit().pulls.createReplyForReviewComment({
+  const { data } = await gh.pulls.createReplyForReviewComment({
     owner: ref.owner,
     repo: ref.repo,
     pull_number: ref.number,
@@ -29,7 +31,7 @@ export function formatPtTime(date: Date): string {
     hour12: true,
   })
     .format(date)
-    .replace(/ /g, " ");
+    .replace(/ /g, " ");
 }
 
 /** The thread reply text for a decision (plan section 9.4). */

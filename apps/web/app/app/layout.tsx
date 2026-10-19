@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import { AuthMenu } from "@/components/app/auth-menu";
 import { PinePointMark } from "@/components/brand/PinePointMark";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
@@ -13,7 +15,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <PinePointMark size={24} className="shrink-0 text-accent" />
           PinePoint
         </Link>
-        <ThemeToggle />
+        <div className="flex items-center gap-3">
+          <Suspense fallback={<span className="size-9" aria-hidden />}>
+            <AuthMenu />
+          </Suspense>
+          <ThemeToggle />
+        </div>
       </header>
       {children}
     </>

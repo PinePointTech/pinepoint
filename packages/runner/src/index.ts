@@ -51,6 +51,7 @@ export {
   createRun,
   createNoPreviewRun,
   createPlanningRun,
+  discardPlanningRun,
   addMissions,
   activeRunFor,
   expireStalePlanning,
@@ -58,10 +59,24 @@ export {
   LIVE_RUN_STATUSES,
   EXISTING_RUN_STATUSES,
   PLANNING_TIMEOUT_SECONDS,
+  ownershipColumns,
   type CreateRunInput,
   type RecentRun,
+  type RunListScope,
+  type RunOwner,
   type RunTarget,
 } from "./create";
+export {
+  admitRun,
+  admissionKeys,
+  admissionDeniedText,
+  dayKey,
+  releaseRunSlots,
+  releaseStaleSlots,
+  type AdmissionDenied,
+  type AdmissionResult,
+  type AdmissionScope,
+} from "./admission";
 export { takeStartLease, dropStartLease, ensureStartLeaseColumn } from "./start-lease";
 export {
   COMPUTER_STOPPED,
@@ -83,7 +98,10 @@ export {
   loadRun,
   loadMissions,
   setRunCompleteHook,
+  setRunAccessHook,
+  accessLostError,
   type AdvanceOptions,
   type RunSnapshot,
   type RunCompleteHook,
+  type RunAccessHook,
 } from "./orchestrate";

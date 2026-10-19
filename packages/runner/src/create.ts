@@ -18,6 +18,16 @@ import {
 } from "@pinepoint/core";
 import { PLANNING_TIMEOUT_ERROR, PLANNING_TIMEOUT_MS } from "./decide";
 
+/**
+ * Who a run belongs to (db/008, docs/github-access-contract.md section 3). Omitted for a legacy
+ * demo run. When set, all three ids are required: a private run cannot be half-owned.
+ */
+export interface RunOwner {
+  workspaceId: string;
+  repositoryId: string;
+  initiatedByUserId: string;
+}
+
 export interface CreateRunInput {
   prUrl: string;
   owner: string;
@@ -28,6 +38,27 @@ export interface CreateRunInput {
   previewUrl: string | null;
   productionUrl: string | null;
   qaMd: string;
+  /** Null or omitted: a legacy run (trigger "legacy"). Set: a private manual run (trigger "manual"). */
+  ownedBy?: RunOwner | null;
+}
+
+/** The ownership columns of an insert. Pure, so the test can check that a half owner is refused. */
+export function ownershipColumns(ownedBy: RunOwner | null | undefined): {
+  workspace_id: string | null;
+  repository_id: string | null;
+  initiated_by_user_id: string | null;
+  trigger: "legacy" | "manual";
+} {
+  if (!ownedBy) return { workspace_id: null, repository_id: null, initiated_by_user_id: null, trigger: "legacy" };
+  if (!ownedBy.workspaceId || !ownedBy.repositoryId || !ownedBy.initiatedByUserId) {
+    throw new Error("A private run needs workspaceId, repositoryId and initiatedByUserId.");
+  }
+  return {
+    workspace_id: ownedBy.workspaceId,
+    repository_id: ownedBy.repositoryId,
+    initiated_by_user_id: ownedBy.initiatedByUserId,
+    trigger: "manual",
+  };
 }
 
 /** One PR head. The same field names as the webhook's claim target. */
@@ -88,10 +119,13 @@ export async function expireStalePlanning(t?: RunTarget): Promise<number> {
 
 /** Inserts a run with status `no_preview`. Nothing else happens for it. */
 export async function createNoPreviewRun(input: CreateRunInput): Promise<string> {
+  const o = ownershipColumns(input.ownedBy);
   const rows = (await sql()`
-    insert into runs (pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status, finished_at)
+    insert into runs (pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status, finished_at,
+                      workspace_id, repository_id, initiated_by_user_id, trigger)
     values (${input.prUrl}, ${input.owner}, ${input.repo}, ${input.prNumber}, ${input.headSha}, ${input.author},
-            null, ${input.productionUrl}, 'no_preview', now())
+            null, ${input.productionUrl}, 'no_preview', now(),
+            ${o.workspace_id}, ${o.repository_id}, ${o.initiated_by_user_id}, ${o.trigger})
     returning id
   `) as Array<{ id: string }>;
   return rows[0]!.id;
@@ -105,13 +139,29 @@ export async function createPlanningRun(input: CreateRunInput): Promise<string> 
   if (!input.previewUrl) {
     throw new Error("createPlanningRun needs a preview URL. Use createNoPreviewRun when there is none.");
   }
+  const o = ownershipColumns(input.ownedBy);
   const rows = (await sql()`
-    insert into runs (pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, qa_md, status)
+    insert into runs (pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, qa_md, status,
+                      workspace_id, repository_id, initiated_by_user_id, trigger)
     values (${input.prUrl}, ${input.owner}, ${input.repo}, ${input.prNumber}, ${input.headSha}, ${input.author},
-            ${input.previewUrl}, ${input.productionUrl}, ${input.qaMd}, 'planning')
+            ${input.previewUrl}, ${input.productionUrl}, ${input.qaMd}, 'planning',
+            ${o.workspace_id}, ${o.repository_id}, ${o.initiated_by_user_id}, ${o.trigger})
     returning id
   `) as Array<{ id: string }>;
   return rows[0]!.id;
+}
+
+/**
+ * Deletes a run that is still `planning` and has no missions: one whose quota admission was
+ * refused right after the insert. Nothing else references it yet. True when a row was deleted.
+ */
+export async function discardPlanningRun(runId: string): Promise<boolean> {
+  const rows = await sql()`
+    delete from runs where id = ${runId} and status = 'planning'
+      and not exists (select 1 from missions m where m.run_id = runs.id)
+    returning id
+  `;
+  return rows.length > 0;
 }
 
 /**
@@ -165,23 +215,38 @@ export async function createRun(input: CreateRunInput, missions: Mission[]): Pro
 export type RecentRun = Omit<RunRow, "qa_md">;
 
 /**
- * The last `limit` runs, newest first, for the history list (plan section 9.2). Every column
- * except qa_md, which the history list does not need. The list never depends on DDL: when
+ * Which runs a history list shows (docs/github-access-contract.md section 7).
+ *   legacy:        runs with no workspace (the public demo). The list without a session.
+ *   repositories:  runs of these repository ids only. The list with a session: the caller passes
+ *                  the repositories the person may view, so an empty list shows nothing.
+ */
+export type RunListScope = { kind: "legacy" } | { kind: "repositories"; repositoryIds: string[] };
+
+/**
+ * The last `limit` runs in `scope`, newest first, for the history list (plan section 9.2). Every
+ * column except qa_md, which the history list does not need. The list never depends on DDL: when
  * runs.error is missing and cannot be added, it reads error as null.
  */
-export async function listRecentRuns(limit = 10): Promise<RecentRun[]> {
+export async function listRecentRuns(limit = 10, scope: RunListScope = { kind: "legacy" }): Promise<RecentRun[]> {
+  if (scope.kind === "repositories" && scope.repositoryIds.length === 0) return [];
   // A dead plan would show as planning forever. Best effort: the list works without it.
   await expireStalePlanning().catch((err: Error) =>
     console.warn(`[runs] could not expire stale planning runs: ${err.message}`),
   );
+  const where = scope.kind === "legacy" ? "workspace_id is null" : "repository_id = any($2::uuid[])";
+  const params: unknown[] = scope.kind === "legacy" ? [limit] : [limit, scope.repositoryIds];
+  const select = (errorColumn: string) =>
+    sql().query(
+      `select id, pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status,
+              review_id, review_posted_at, cost_usd, started_at, finished_at, next_start_at, ${errorColumn},
+              workspace_id, repository_id, initiated_by_user_id, trigger
+       from runs where ${where} order by started_at desc nulls last limit $1`,
+      params,
+    );
   let ddlFailed = false;
   try {
     return (await withRunErrorColumn(
-      () => sql()`
-        select id, pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status,
-               review_id, review_posted_at, cost_usd, started_at, finished_at, next_start_at, error
-        from runs order by started_at desc nulls last limit ${limit}
-      `,
+      () => select("error"),
       () =>
         ensureRunErrorColumn().catch((err: unknown) => {
           ddlFailed = true;
@@ -191,10 +256,6 @@ export async function listRecentRuns(limit = 10): Promise<RecentRun[]> {
   } catch (err) {
     if (!ddlFailed && !isUndefinedColumn(err)) throw err;
     console.warn(`[runs] runs.error is not available, the history list sends null: ${(err as Error).message}`);
-    return (await sql()`
-      select id, pr_url, owner, repo, pr_number, head_sha, author, preview_url, production_url, status,
-             review_id, review_posted_at, cost_usd, started_at, finished_at, next_start_at, null::text as error
-      from runs order by started_at desc nulls last limit ${limit}
-    `) as RecentRun[];
+    return (await select("null::text as error")) as RecentRun[];
   }
 }

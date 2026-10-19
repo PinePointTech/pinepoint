@@ -4,7 +4,8 @@
 // ```suggestion block. GitHub shows "Commit suggestion" on it. Then a reply in the finding thread
 // links to it: "Proposed fix: {link}".
 
-import { octokit, type PrRef } from "./client";
+import type { Octokit } from "@octokit/rest";
+import type { PrRef } from "./client";
 import { replyInThread } from "./thread";
 
 /** The part of a fix that the suggestion needs. The shape comes from @pinepoint/ai FixSchema. */
@@ -77,24 +78,24 @@ export type PostFixResult = {
 };
 
 /**
- * Creates the suggestion comment on the fix range, then replies in the finding thread with a link
- * to it. When the finding has no review comment, the reply goes on the PR as an issue comment.
+ * Creates the suggestion comment on the fix range as `gh`, then replies in the finding thread with a
+ * link to it. When the finding has no review comment, the reply goes on the PR as an issue comment.
  */
 export async function postFixSuggestion(
+  gh: Octokit,
   ref: PrRef,
   headSha: string,
   fix: SuggestedFix,
   findingCommentId: number | null,
   findingTitle = "Finding",
 ): Promise<PostFixResult> {
-  const gh = octokit();
   const { data } = await gh.pulls.createReviewComment(buildSuggestionPayload(ref, headSha, fix));
   const reply = proposedFixReply(data.html_url);
 
   let replyUrl: string | null = null;
   try {
     if (findingCommentId !== null) {
-      replyUrl = (await replyInThread(ref, findingCommentId, reply)).url;
+      replyUrl = (await replyInThread(gh, ref, findingCommentId, reply)).url;
     } else {
       const issue = await gh.issues.createComment({
         owner: ref.owner,

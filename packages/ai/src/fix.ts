@@ -9,8 +9,8 @@
 // GitHub, calls `proposeFix` and writes findings.fix.
 
 import { z } from "zod";
-import { loadShot, shotIdFromPath, sql, type FindingRow, type MissionRow, type StoredShot } from "@pinepoint/core";
-import { octokit, type PrRef } from "@pinepoint/github";
+import { loadShot, shotIdFromPath, sql, type FindingRow, type MissionRow, type RunOwnership, type StoredShot } from "@pinepoint/core";
+import type { Octokit, PrRef } from "@pinepoint/github";
 import { getPrDiff, readFilesWithinBudget, type RepoFile } from "@pinepoint/github/context";
 import { completeWithAnthropic, fixModel, imageBlock, type Complete, type CompleteImage, type TokenUsage } from "./client";
 import { annotateDiff, changedPaths, isInsideHunk, rightSideHunkLines } from "./diff";
@@ -369,6 +369,8 @@ export interface FixFindingOptions extends ProposeFixOptions {
   force?: boolean;
   /** Build and validate, but write nothing. */
   dryRun?: boolean;
+  /** The GitHub client that reads the PR: the acting person's for a private run, the shared token for a legacy one. Required. */
+  gh: Octokit;
 }
 
 export interface FixFindingResult {
@@ -380,11 +382,13 @@ export interface FixFindingResult {
   diff: string | null;
 }
 
-type FindingWithRun = FindingRow & { owner: string; repo: string; pr_number: number; head_sha: string | null };
+/** A finding with its run's PR reference and ownership, so a route can authorize before it acts. */
+export type FindingWithRun = FindingRow & { owner: string; repo: string; pr_number: number; head_sha: string | null } & RunOwnership;
 
 export async function loadFindingWithRun(findingId: string): Promise<FindingWithRun | null> {
   const rows = (await sql()`
-    select f.*, r.owner, r.repo, r.pr_number, r.head_sha
+    select f.*, r.owner, r.repo, r.pr_number, r.head_sha,
+           r.workspace_id, r.repository_id, r.initiated_by_user_id, r.trigger
     from findings f join runs r on r.id = f.run_id
     where f.id = ${findingId}
   `) as FindingWithRun[];
@@ -417,7 +421,7 @@ export async function loadMissionErrors(missionIds: string[]): Promise<string[]>
  * Returns the stored fix when the finding has one, unless `force` is set.
  * Throws when the finding is not a Bug: an old bug gets no fix (plan section 3).
  */
-export async function fixFinding(findingId: string, options: FixFindingOptions = {}): Promise<FixFindingResult> {
+export async function fixFinding(findingId: string, options: FixFindingOptions): Promise<FixFindingResult> {
   const finding = await loadFindingWithRun(findingId);
   if (!finding) throw new Error(`Finding ${findingId} does not exist.`);
   if (finding.level !== "bug") {
@@ -432,7 +436,7 @@ export async function fixFinding(findingId: string, options: FixFindingOptions =
   }
 
   const ref: PrRef = { owner: finding.owner, repo: finding.repo, number: finding.pr_number };
-  const gh = octokit();
+  const gh = options.gh;
   const [diff, errors, screenshot] = await Promise.all([
     getPrDiff(gh, ref),
     loadMissionErrors(finding.mission_ids ?? []),

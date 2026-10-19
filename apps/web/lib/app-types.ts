@@ -121,18 +121,121 @@ export interface RunsResponse {
   runs: Run[];
 }
 
-// POST /api/runs with { prUrl }. The route answers in a few seconds: 202 with status
-// "planning" for a new run, 200 with existing: true for a run of the same commit that is
-// still going, 200 with status "no_preview" when the PR has no preview.
-export interface CreateRunRequest {
-  prUrl: string;
-  previewUrl?: string;
-  force?: boolean;
-}
+// POST /api/runs. The route answers in a few seconds: 202 with status "planning" for a new
+// run, 200 with existing: true for a run of the same commit that is still going, 200 with
+// status "no_preview" when the PR has no preview. Two shapes (docs/github-access-contract.md
+// section 7): a PR URL alone is the public demo; repositoryId + prNumber is a private manual
+// run on a connected repository and needs a session.
+export type CreateRunRequest =
+  | { prUrl: string; previewUrl?: string; force?: boolean }
+  | { repositoryId: string; prNumber: number; expectedHeadSha?: string; force?: boolean };
 export interface CreateRunResponse {
   runId: string;
   status: RunStatus;
   existing: boolean;
+}
+
+// ---------- sign-in and connected repositories (VI-30, VI-31, VI-35) ----------
+
+export interface PublicUser {
+  id: string;
+  login: string;
+  name: string | null;
+  avatarUrl: string | null;
+}
+
+// GET /api/auth/me
+export interface MeResponse {
+  user: PublicUser | null;
+  signInAvailable: boolean;
+}
+
+export type AccessLevel = "none" | "read" | "write" | "configure";
+export type AccessState =
+  | "ok"
+  | "read_only"
+  | "not_member"
+  | "no_access"
+  | "not_selected"
+  | "installation_inactive"
+  | "unknown"
+  | "rate_limited"
+  | "sso_required"
+  | "reauthorize";
+
+export interface AccessView {
+  level: AccessLevel;
+  state: AccessState | string;
+  reason: string;
+  canLaunch: boolean;
+  canConfigure: boolean;
+}
+
+// GET /api/workspaces
+export interface WorkspaceView {
+  id: string;
+  login: string;
+  type: "Organization" | "User";
+  installationStatus: "active" | "suspended" | "deleted" | "pending" | null;
+  repositoryCount: number;
+}
+export interface WorkspacesResponse {
+  connected: WorkspaceView[];
+  unconnected: Array<{ installationId: number; login: string; type: "Organization" | "User" }>;
+  installAvailable: boolean;
+}
+
+// GET /api/workspaces/[id]/repositories
+export interface RepositoryView {
+  id: string;
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string | null;
+  access: AccessView;
+}
+export interface RepositoriesResponse {
+  repositories: RepositoryView[];
+}
+
+// GET /api/repositories/[id]/pulls
+export interface PullView {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  draft: boolean;
+  headSha: string;
+  headRef: string;
+  isFork: boolean;
+  updatedAt: string;
+}
+export interface PullsResponse {
+  pulls: PullView[];
+}
+
+export type PreviewState = "ready" | "building" | "failed" | "missing" | "protected" | "unreachable" | "unsafe";
+
+// POST /api/repositories/[id]/preflight
+export interface PreflightResponse {
+  ok: true;
+  canRun: boolean;
+  blockers: string[];
+  access: AccessView;
+  pr: { number: number; title: string; url: string; state: "open" | "closed"; draft: boolean; isFork: boolean; headSha: string; headRef: string; author: string };
+  preview: { state: PreviewState; url: string | null; note: string };
+  qaFile: { path: string; exists: boolean; note: string };
+  quota: Array<{ scope: string; limit: number; used: number }>;
+}
+
+// GET and PUT /api/repositories/[id]/settings
+export interface RepositorySettingsView {
+  qaMdPath: string;
+  previewProjectName: string | null;
+  productionUrl: string | null;
+  canConfigure: boolean;
+  updatedAt: string | null;
 }
 
 export const TERMINAL_RUN_STATUSES: RunStatus[] = [

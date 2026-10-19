@@ -144,6 +144,9 @@ importers:
       '@octokit/rest':
         specifier: 22.0.1
         version: 22.0.1
+      '@pinepoint/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: 22.20.5

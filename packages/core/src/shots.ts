@@ -116,6 +116,22 @@ export async function latestShotPaths(missionIds: string[]): Promise<Map<string,
 }
 
 /** Loads one picture, or null when the id is unknown or the table does not exist yet. */
+/** Which run a picture belongs to and whether it is private (runs.workspace_id set). Null for an unknown id. */
+export async function shotOwner(id: string): Promise<{ runId: string; isPrivate: boolean } | null> {
+  try {
+    const rows = (await sql()`
+      select r.id as run_id, r.workspace_id from mission_shots s
+      join missions m on m.id = s.mission_id join runs r on r.id = m.run_id
+      where s.id = ${id}
+    `) as Array<{ run_id: string; workspace_id: string | null }>;
+    const row = rows[0];
+    return row ? { runId: row.run_id, isPrivate: row.workspace_id !== null } : null;
+  } catch (err) {
+    if (missingTable(err)) return null;
+    throw err;
+  }
+}
+
 export async function loadShot(id: string): Promise<StoredShot | null> {
   try {
     const rows = (await sql()`

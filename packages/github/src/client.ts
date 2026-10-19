@@ -2,6 +2,9 @@
 
 import { Octokit } from "@octokit/rest";
 
+/** The client type, for packages that take a client but do not depend on Octokit themselves. */
+export type { Octokit };
+
 export type PrRef = { owner: string; repo: string; number: number };
 
 let cached: Octokit | undefined;

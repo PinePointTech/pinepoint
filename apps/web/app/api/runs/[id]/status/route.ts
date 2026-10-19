@@ -8,9 +8,13 @@
 // A run that POST /api/runs or the GitHub webhook started also drives itself (lib/drive.ts).
 // advanceRun is safe to call from both at the same time: every state change is a conditional update.
 // A run in `planning` gets only the 6-minute timeout check.
+//
+// A private run (docs/github-access-contract.md section 7) needs a session with view access to its
+// repository and answers 404 otherwise, with no-store headers. A legacy run stays public.
 
 import { after } from "next/server";
 import { advanceRun, needsStarts, startQueued } from "@pinepoint/runner";
+import { authorizeRun } from "@/lib/access";
 import "@/lib/run-hooks";
 
 export const dynamic = "force-dynamic";
@@ -19,11 +23,13 @@ export const maxDuration = 120;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!UUID.test(id)) {
     return Response.json({ error: "The run id is not a UUID." }, { status: 400 });
   }
+  const guarded = await authorizeRun(request, id, "view");
+  if (!guarded.ok) return guarded.response;
   const snapshot = await advanceRun(id, { fillSlots: false });
   if (!snapshot) {
     return Response.json({ error: "No run with this id." }, { status: 404 });
@@ -38,5 +44,5 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       }
     });
   }
-  return Response.json(snapshot);
+  return Response.json(snapshot, { headers: { "cache-control": guarded.value.isPrivate ? "private, no-store" : "no-store" } });
 }

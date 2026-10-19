@@ -37,6 +37,17 @@ export interface RunRow {
   qa_md: string | null;
   /** Why the run failed, for example "Planning failed: ...". null for every other status. */
   error: string | null;
+  /** Ownership (db/008). Null workspace_id marks a legacy run: public demo data with no tenant. */
+  workspace_id: string | null;
+  repository_id: string | null;
+  initiated_by_user_id: string | null;
+  /** How the run started. "legacy" for old rows and demo runs without a session, "manual" for Run QA. */
+  trigger: "legacy" | "manual";
+}
+
+/** True for a run that belongs to a workspace, so every read and write of it needs repository access. */
+export function isPrivateRun(run: Pick<RunRow, "workspace_id">): boolean {
+  return run.workspace_id !== null && run.workspace_id !== undefined;
 }
 
 export interface MissionRow {

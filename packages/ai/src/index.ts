@@ -87,4 +87,5 @@ export {
   type ProposeFixResult,
   type FixFindingOptions,
   type FixFindingResult,
+  type FindingWithRun,
 } from "./fix";

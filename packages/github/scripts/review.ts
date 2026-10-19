@@ -6,7 +6,7 @@
 // --fixture builds the payload from a built-in sample and never touches the DB or GitHub.
 
 import { parseArgs } from "node:util";
-import { parsePrUrl } from "../src/client";
+import { octokit, parsePrUrl } from "../src/client";
 import {
   buildReviewPayload,
   postReview,
@@ -113,7 +113,8 @@ async function main() {
   if (!values.run) {
     throw new Error("Usage: test:review -- --run RUN_ID [--dry-run] | --fixture --dry-run");
   }
-  const result = await postReview(values.run, { dryRun: values["dry-run"] });
+  // A script for legacy demo runs: the shared token posts. A private run's review goes through the app.
+  const result = await postReview(values.run, { dryRun: values["dry-run"], gh: octokit() });
   console.log(JSON.stringify(result, null, 2));
   if (!values["dry-run"] && !result.posted) {
     console.log("Not posted: the review for this run was already posted (review_posted_at is set).");

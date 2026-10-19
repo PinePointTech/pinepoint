@@ -11,18 +11,25 @@
 
 import { planMissions, type ChangedFile } from "@pinepoint/ai";
 import type { Mission, RunStatus } from "@pinepoint/core";
-import { getPrContext, type PrContext } from "@pinepoint/github/context";
+import type { Octokit } from "@pinepoint/github";
+import { getPrContext, legacyRepoQaConfig, type PrContext, type RepoQaConfig } from "@pinepoint/github/context";
 import { postNoPreviewComment } from "@pinepoint/github/no-preview";
 import {
   LIVE_RUN_STATUSES,
   activeRunFor,
   addMissions,
+  admissionDeniedText,
+  admitRun,
   createNoPreviewRun,
   createPlanningRun,
+  discardPlanningRun,
   expireStalePlanning,
   failRun,
   runErrorText,
   startRun,
+  type AdmissionDenied,
+  type AdmissionScope,
+  type RunOwner,
   type RunTarget,
 } from "@pinepoint/runner";
 import { driveRun } from "./drive";
@@ -38,6 +45,17 @@ export class PrReadError extends Error {
 
 export interface StartRunInput {
   prUrl: string;
+  /**
+   * The GitHub client that reads the PR and posts the no-preview comment: the acting person's for
+   * a private run, the shared token for a legacy one (docs/github-access-contract.md section 4).
+   */
+  gh: Octokit;
+  /** Where the QA file lives and which Vercel project is the preview. Legacy defaults when omitted. */
+  qaConfig?: RepoQaConfig;
+  /** Who the run belongs to. Omitted for a legacy run. */
+  ownedBy?: RunOwner;
+  /** Quota scopes of a private run. Admission happens right after the row exists and before any paid work. */
+  admission?: AdmissionScope;
   /** Replaces the preview URL that GitHub reports. */
   previewUrl?: string;
   /**
@@ -65,15 +83,18 @@ export type PrepareOutcome =
   | { status: "existing"; runId: string; runStatus: RunStatus }
   | { status: "no_preview"; runId: string }
   | { status: "no_preview_skipped"; headSha: string }
-  | { status: "head_moved"; headSha: string };
+  | { status: "head_moved"; headSha: string }
+  | { status: "quota"; denied: AdmissionDenied; message: string };
 
 /** What prepareRun reads and writes. The tests replace these. */
 export interface PrepareDeps {
-  getPrContext: (prUrl: string) => Promise<PrContext>;
+  getPrContext: (prUrl: string, gh: Octokit, config: RepoQaConfig) => Promise<PrContext>;
   activeRunFor: typeof activeRunFor;
   expireStalePlanning: typeof expireStalePlanning;
   createNoPreviewRun: typeof createNoPreviewRun;
   createPlanningRun: typeof createPlanningRun;
+  discardPlanningRun: typeof discardPlanningRun;
+  admitRun: typeof admitRun;
   postNoPreviewComment: typeof postNoPreviewComment;
   claimLiveHead: typeof claimLiveHead;
   attachLiveRun: typeof attachLiveRun;
@@ -87,6 +108,8 @@ export const prepareDeps: PrepareDeps = {
   expireStalePlanning,
   createNoPreviewRun,
   createPlanningRun,
+  discardPlanningRun,
+  admitRun,
   postNoPreviewComment,
   claimLiveHead,
   attachLiveRun,
@@ -112,9 +135,12 @@ async function waitForLiveRun(t: RunTarget, deps: PrepareDeps) {
 
 /** The fast step: everything before the planner. The run row, when there is one, is the last thing it writes. */
 export async function prepareRun(input: StartRunInput, deps: PrepareDeps = prepareDeps): Promise<PrepareOutcome> {
+  if (Boolean(input.ownedBy) !== Boolean(input.admission)) {
+    throw new Error("A private run needs both ownedBy and admission; a legacy run neither.");
+  }
   let context: PrContext;
   try {
-    context = await deps.getPrContext(input.prUrl);
+    context = await deps.getPrContext(input.prUrl, input.gh, input.qaConfig ?? legacyRepoQaConfig());
   } catch (err) {
     throw new PrReadError(err);
   }
@@ -145,8 +171,10 @@ export async function prepareRun(input: StartRunInput, deps: PrepareDeps = prepa
     headSha: context.headSha,
     author: context.author || null,
     previewUrl,
-    productionUrl: context.productionUrl || process.env.DEMO_PRODUCTION_URL || null,
+    // The demo production URL is a legacy default only. A connected repository sets its own in its settings.
+    productionUrl: context.productionUrl || (input.ownedBy ? null : process.env.DEMO_PRODUCTION_URL || null),
     qaMd: context.qaMd ?? "",
+    ownedBy: input.ownedBy ?? null,
   };
 
   if (!previewUrl) {
@@ -155,7 +183,7 @@ export async function prepareRun(input: StartRunInput, deps: PrepareDeps = prepa
     }
     const runId = await deps.createNoPreviewRun(base);
     try {
-      await deps.postNoPreviewComment({ owner: context.owner, repo: context.repo, number: context.number });
+      await deps.postNoPreviewComment({ owner: context.owner, repo: context.repo, number: context.number }, input.gh);
     } catch (err) {
       console.warn(`[runs] no-preview comment failed: ${(err as Error).message}`);
     }
@@ -191,6 +219,18 @@ export async function prepareRun(input: StartRunInput, deps: PrepareDeps = prepa
       await deps.releaseLiveClaim(target).catch((e: Error) => console.warn(`[runs] could not release the live claim: ${e.message}`));
     }
     throw err;
+  }
+  if (input.admission) {
+    // The slot rows reference the run, so admission comes right after the insert. A refused run
+    // is deleted again: it has no missions and did no paid work, and the claim is released.
+    const admitted = await deps.admitRun(runId, input.admission);
+    if (!admitted.admitted) {
+      await deps.discardPlanningRun(runId).catch((e: Error) => console.warn(`[runs] could not discard run ${runId}: ${e.message}`));
+      if (claimed) {
+        await deps.releaseLiveClaim(target).catch((e: Error) => console.warn(`[runs] could not release the live claim: ${e.message}`));
+      }
+      return { status: "quota", denied: admitted, message: admissionDeniedText(admitted) };
+    }
   }
   if (claimed) {
     // A failed attach only leaves the claim without its run id. It goes stale in 2 minutes, and

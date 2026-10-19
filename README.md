@@ -73,6 +73,7 @@ pnpm --filter ai test
 pnpm --filter ai test:findings -- --run RUN_ID   # build or show a finished run's findings
 pnpm --filter @pinepoint/runner test
 pnpm --filter @pinepoint/github test
+pnpm --filter web test
 ```
 
 ## GitHub webhook
@@ -85,3 +86,17 @@ When a demo store preview deploys for an open PR that changes `apps/demo-store/`
 4. The ping in Recent Deliveries shows 200.
 
 Optional: `PINEPOINT_WEBHOOK_PATHS` (default `apps/demo-store/`).
+
+The auto-start applies to the public demo repositories only (`PINEPOINT_DEMO_REPOS`, default `vihuynh72/pinepoint`). A connected organization repository never starts a run from a webhook.
+
+## GitHub sign-in and organization access
+
+People sign in with GitHub and run QA on pull requests of repositories their organization connected. The rules are in [docs/github-access-contract.md](docs/github-access-contract.md) and the release gate in [docs/github-access-validation.md](docs/github-access-validation.md). In short:
+
+- One GitHub App does both: user sign-in (OAuth, tokens encrypted at rest, refreshed on the server) and installation on an organization or account with selected repositories.
+- A person may see and launch QA on a repository when they have write access on GitHub and are a member of the owning organization (outside collaborators cannot). Maintainers and admins can also change the repository's QA settings.
+- Every launch, review post, fix and desktop action on a connected repository uses the acting person's own GitHub token. There is no fallback to an installation token or the shared `GITHUB_TOKEN`, which stays for the public demo alone.
+- Runs on connected repositories start from the Run QA button only, after a preflight that checks the access, the preview, the QA file and the quota. Nothing starts from a push or a webhook.
+- A run's status, pictures and desktop are visible to people with access to its repository and answer 404 to everyone else. Legacy demo runs stay public.
+
+Setup: register the GitHub App as described in `.env.example` (callback, setup and webhook URLs; permissions; events), set the `GITHUB_APP_*` variables, and apply `db/008_github_access.sql` (`pnpm --filter @pinepoint/core db:migrate`). Without the variables, sign-in is off and `/app` works as the public demo.
