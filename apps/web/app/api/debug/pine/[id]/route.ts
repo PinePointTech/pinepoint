@@ -1,8 +1,8 @@
 // TEMPORARY: preview-only probe of one mission's Pine session (events, frames, screenshot, artifacts).
 // Answers 404 outside Vercel preview deployments. Remove before merging to main.
 
-import { loadHandle } from "@pinepoint/core";
-import { rebuild, uploadScreenshot } from "@pinepoint/runner";
+import { loadHandle, saveShot } from "@pinepoint/core";
+import { rebuild } from "@pinepoint/runner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -44,7 +44,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       out.firstFrame = { mediaType: ff.mediaType, width: ff.width, height: ff.height, bytes: ff.data.byteLength, title: ff.activity?.title ?? null };
       if (url.searchParams.get("blob") === "1") {
         try {
-          out.blob = { url: await uploadScreenshot(`debug-${id}`, ff.data) };
+          out.saved = { url: await saveShot({ missionId: id, idx: 99, mediaType: ff.mediaType, data: ff.data, title: "debug probe" }) };
         } catch (err) {
           out.blobError = errInfo(err);
         }

@@ -12,8 +12,7 @@ import {
   type ProjectPolicy,
   type Session,
 } from "@pinesandbox/computer";
-import { put } from "@vercel/blob";
-import { MissionResultSchema, type MissionResult, type PineHandle } from "@pinepoint/core";
+import { MissionResultSchema, saveShot, type MissionResult, type PineHandle } from "@pinepoint/core";
 import { buildGoal, type GoalInput } from "./goal";
 
 /** One mission may run this long (plan section 5, rule 7). It is also the turn's own wall budget. */
@@ -222,21 +221,18 @@ export async function collectArtifacts(handle: PineHandle): Promise<MissionArtif
   return { result, resultError, screenshot: screenshot ?? null };
 }
 
-/** Uploads fail.png to Vercel Blob with public access (plan section 7). Returns the public URL. */
+/**
+ * Saves fail.png in the mission_shots table and returns its path (/api/shots/<id>).
+ * The pictures used to go to Vercel Blob; its token stopped working when the project changed teams,
+ * and every upload failed with "Access denied". Postgres needs no extra credential.
+ */
 export async function uploadScreenshot(missionId: string, bytes: Uint8Array): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("BLOB_READ_WRITE_TOKEN is not set. Put the Vercel Blob token in .env.local.");
-  }
-  const blob = await put(`missions/${missionId}/fail.png`, Buffer.from(bytes), {
-    access: "public",
-    contentType: "image/png",
-    allowOverwrite: true,
-  });
-  return blob.url;
+  return saveShot({ missionId, idx: 0, mediaType: "image/png", data: bytes, title: "Failure screen" });
 }
 
-/** One picture of the screen after an agent step, stored in Vercel Blob. Saved in missions.result.step_shots (result.steps holds the agent's own text steps). */
+/** One picture of the screen after an agent step. Saved in missions.result.step_shots (result.steps holds the agent's own text steps). */
 export interface StepShot {
+  /** /api/shots/<id> */
   url: string;
   /** The step's title from Pine, for example "Click Add to cart". Empty when the frame has no step. */
   title: string;
@@ -250,12 +246,6 @@ export const MAX_STEP_SHOTS = 12;
 const MAX_EVENT_PAGES = 20;
 const EVENTS_PAGE_LIMIT = 100;
 
-function extFor(mediaType: string): string {
-  if (mediaType.includes("jpeg") || mediaType.includes("jpg")) return "jpg";
-  if (mediaType.includes("webp")) return "webp";
-  return "png";
-}
-
 /** Keeps `max` items spread over the list, with the first and the last always in. Exported for the tests. */
 export function sampleEvenly<T>(items: T[], max: number): T[] {
   if (items.length <= max) return items;
@@ -268,12 +258,12 @@ export function sampleEvenly<T>(items: T[], max: number): T[] {
 }
 
 /**
- * Reads the turn's `frame` events (Pine's picture of the screen after each step), uploads up to
- * MAX_STEP_SHOTS of them to Vercel Blob and returns their public URLs in step order.
- * Call it before the Computer is stopped. Returns [] when the session has no frames or a read fails.
+ * Reads the turn's `frame` events (Pine's picture of the screen after each step), saves up to
+ * MAX_STEP_SHOTS of them in mission_shots and returns their paths in step order. When the turn has
+ * no frames, it takes one screenshot of the screen as it is. Call it before the Computer is stopped:
+ * a stopped Computer answers every read with RuntimeGoneError. Returns [] when nothing could be read.
  */
 export async function collectStepShots(handle: PineHandle, missionId: string): Promise<StepShot[]> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return [];
   const { session } = rebuild(handle);
   const frames: Array<{ data: Uint8Array; mediaType: string; title: string; at: string | null }> = [];
   try {
@@ -312,21 +302,23 @@ export async function collectStepShots(handle: PineHandle, missionId: string): P
   }
 
   const picked = sampleEvenly(frames, MAX_STEP_SHOTS);
-  const uploaded = await Promise.all(
+  const saved = await Promise.all(
     picked.map(async (f, i) => {
       try {
-        const name = `missions/${missionId}/steps/${String(i + 1).padStart(2, "0")}.${extFor(f.mediaType)}`;
-        const blob = await put(name, Buffer.from(f.data), {
-          access: "public",
-          contentType: f.mediaType,
-          allowOverwrite: true,
+        const url = await saveShot({
+          missionId,
+          idx: i + 1,
+          mediaType: f.mediaType,
+          data: f.data,
+          title: f.title,
+          observedAt: f.at,
         });
-        return { url: blob.url, title: f.title, at: f.at } satisfies StepShot;
+        return { url, title: f.title, at: f.at } satisfies StepShot;
       } catch (err) {
-        console.warn(`[runner] step picture upload failed for mission ${missionId}: ${(err as Error).message}`);
+        console.warn(`[runner] could not save step picture ${i + 1} for mission ${missionId}: ${(err as Error).message}`);
         return null;
       }
     }),
   );
-  return uploaded.filter((s): s is StepShot => s !== null);
+  return saved.filter((s): s is StepShot => s !== null);
 }
