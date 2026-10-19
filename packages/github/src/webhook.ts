@@ -50,6 +50,27 @@ export function verifyDriveToken(secret: string | undefined, runId: string, toke
   return safeEqual(token.trim(), driveToken(secret, runId));
 }
 
+/** The variables that driveBaseUrl reads: VERCEL_ENV, VERCEL_BRANCH_URL, VERCEL_URL and APP_BASE_URL. */
+export type DriveEnv = Readonly<Record<string, string | undefined>>;
+
+function asBaseUrl(hostOrUrl: string | undefined): string | null {
+  const value = hostOrUrl?.trim();
+  if (!value) return null;
+  const url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  return url.replace(/\/+$/, "");
+}
+
+/**
+ * The base URL for the next drive slice (POST /api/runs/[id]/drive). It must be the deployment
+ * that runs this code, or a preview run would go on with production code.
+ * Production: APP_BASE_URL. Preview and development: VERCEL_BRANCH_URL, then VERCEL_URL, then
+ * APP_BASE_URL. Vercel sets the first two without a protocol. Null when none is set.
+ */
+export function driveBaseUrl(env: DriveEnv = process.env): string | null {
+  if (env.VERCEL_ENV === "production") return asBaseUrl(env.APP_BASE_URL);
+  return asBaseUrl(env.VERCEL_BRANCH_URL) ?? asBaseUrl(env.VERCEL_URL) ?? asBaseUrl(env.APP_BASE_URL);
+}
+
 /** PINEPOINT_WEBHOOK_PATHS as a list of prefixes. Comma separated. Empty or unset gives the default. */
 export function webhookPaths(raw: string | undefined = process.env.PINEPOINT_WEBHOOK_PATHS): string[] {
   const list = (raw ?? "")

@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
 import {
   DEFAULT_WEBHOOK_PATHS,
+  driveBaseUrl,
   driveToken,
   isDemoPreviewEnvironment,
   listPrPaths,
@@ -114,6 +115,34 @@ test("openPrForSha skips a SHA that is not the head any more, or has no open PR"
   assert.equal(older.found, false);
   const none = await openPrForSha(fakeGh([{ number: 3, state: "closed", head: { sha: "abc" } }]), { owner: "o", repo: "r" }, "abc");
   assert.equal(none.found, false);
+});
+
+test("driveBaseUrl: production chains to APP_BASE_URL", () => {
+  const env = {
+    VERCEL_ENV: "production",
+    VERCEL_BRANCH_URL: "pinepoint-git-main-team.vercel.app",
+    VERCEL_URL: "pinepoint-abc123-team.vercel.app",
+    APP_BASE_URL: "https://pinepoint.example/",
+  };
+  assert.equal(driveBaseUrl(env), "https://pinepoint.example");
+  assert.equal(driveBaseUrl({ VERCEL_ENV: "production", VERCEL_URL: "x.vercel.app" }), null, "no fallback to a deployment URL");
+});
+
+test("driveBaseUrl: a preview chains to its own branch URL, then its deployment URL, then APP_BASE_URL", () => {
+  const preview = { VERCEL_ENV: "preview", APP_BASE_URL: "https://pinepoint.example" };
+  assert.equal(
+    driveBaseUrl({ ...preview, VERCEL_BRANCH_URL: "pinepoint-git-fix-team.vercel.app", VERCEL_URL: "pinepoint-abc123-team.vercel.app" }),
+    "https://pinepoint-git-fix-team.vercel.app",
+  );
+  assert.equal(driveBaseUrl({ ...preview, VERCEL_URL: "pinepoint-abc123-team.vercel.app" }), "https://pinepoint-abc123-team.vercel.app");
+  assert.equal(driveBaseUrl({ ...preview, VERCEL_BRANCH_URL: " ", VERCEL_URL: "" }), "https://pinepoint.example");
+  assert.equal(driveBaseUrl(preview), "https://pinepoint.example");
+});
+
+test("driveBaseUrl: local development uses APP_BASE_URL, keeps a protocol, and gives null when nothing is set", () => {
+  assert.equal(driveBaseUrl({ APP_BASE_URL: "http://localhost:3000/" }), "http://localhost:3000");
+  assert.equal(driveBaseUrl({ VERCEL_ENV: "development", VERCEL_URL: "https://dev.example//" }), "https://dev.example");
+  assert.equal(driveBaseUrl({}), null);
 });
 
 test("listPrPaths includes the old path of a renamed file", async () => {
