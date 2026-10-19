@@ -3,6 +3,7 @@
 
 import { loadHandle } from "@pinepoint/core";
 import { rebuild } from "@pinepoint/runner";
+import { put } from "@vercel/blob";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -39,6 +40,24 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       }
     }
     const firstFrameEvent = page.events.find((e) => e.type === "frame");
+    const ff = firstFrameEvent?.frame();
+    if (ff) {
+      out.firstFrame = { mediaType: ff.mediaType, width: ff.width, height: ff.height, bytes: ff.data.byteLength, title: ff.activity?.title ?? null };
+      if (url.searchParams.get("blob") === "1") {
+        for (const access of ["public", "private"] as const) {
+          try {
+            const blob = await put(`debug/${id}/frame-${access}.${ff.mediaType.includes("png") ? "png" : "jpg"}`, Buffer.from(ff.data), {
+              access: access as "public",
+              contentType: ff.mediaType,
+              allowOverwrite: true,
+            });
+            out[`blob_${access}`] = { url: blob.url, downloadUrl: blob.downloadUrl };
+          } catch (err) {
+            out[`blob_${access}_error`] = errInfo(err);
+          }
+        }
+      }
+    }
     out.page = {
       ms: Date.now() - t0,
       events: page.events.length,
