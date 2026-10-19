@@ -3,7 +3,16 @@
 export { sql, databaseUrl, type Sql } from "./db";
 export { encrypt, decrypt, encryptionKey } from "./crypto";
 export { saveHandle, loadHandle, type PineHandle } from "./handles";
-export { saveShot, loadShot, shotPath, absoluteShotUrl, type ShotInput, type StoredShot } from "./shots";
+export {
+  saveShot,
+  loadShot,
+  latestShotPaths,
+  shotPath,
+  shotIdFromPath,
+  type ShotInput,
+  type StoredShot,
+} from "./shots";
+export { ensureRunErrorColumn, isUndefinedColumn, withRunErrorColumn } from "./run-error";
 export {
   LENSES,
   MISSIONS_PER_RUN,

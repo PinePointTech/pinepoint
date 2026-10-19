@@ -19,15 +19,16 @@ export interface StoredShot {
   data: Buffer;
 }
 
-/** The path that serves a stored picture. Relative, so it works on every deployment; see absoluteShotUrl. */
+/** The path that serves a stored picture. Relative, so it works on every deployment. */
 export function shotPath(id: string): string {
   return `/api/shots/${id}`;
 }
 
-/** A shot path made absolute with `base` (APP_BASE_URL) for places outside the app, such as a GitHub review. */
-export function absoluteShotUrl(url: string, base: string | undefined): string {
-  if (!url.startsWith("/") || !base) return url;
-  return `${base.replace(/\/+$/, "")}${url}`;
+const SHOT_PATH = /^\/api\/shots\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+
+/** The picture id of a shotPath ("/api/shots/<uuid>"), or null for any other value. */
+export function shotIdFromPath(path: string | null | undefined): string | null {
+  return path ? (SHOT_PATH.exec(path)?.[1] ?? null) : null;
 }
 
 function missingTable(err: unknown): boolean {
@@ -66,6 +67,29 @@ export async function saveShot(input: ShotInput, retried = false): Promise<strin
       await createShotsTable();
       return saveShot(input, true);
     }
+    throw err;
+  }
+}
+
+/**
+ * The picture path of each mission that has one, for a mission whose screenshot_url is not written
+ * yet. The choice is the one the runner makes: fail.png (idx 0) first, else the newest step picture.
+ * An empty map when the table does not exist yet.
+ */
+export async function latestShotPaths(missionIds: string[]): Promise<Map<string, string>> {
+  const paths = new Map<string, string>();
+  if (missionIds.length === 0) return paths;
+  try {
+    const rows = (await sql().query(
+      `select distinct on (mission_id) mission_id, id from mission_shots
+       where mission_id = any($1::uuid[])
+       order by mission_id, (idx = 0) desc, created_at desc, idx desc`,
+      [missionIds],
+    )) as Array<{ mission_id: string; id: string }>;
+    for (const row of rows) paths.set(row.mission_id, shotPath(row.id));
+    return paths;
+  } catch (err) {
+    if (missingTable(err)) return paths;
     throw err;
   }
 }

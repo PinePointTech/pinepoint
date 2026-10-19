@@ -1,4 +1,5 @@
-// Row types for the runs, missions and findings tables (plan section 4.3, db/001_init.sql, db/002_run_state.sql).
+// Row types for the runs, missions and findings tables (plan section 4.3, db/001_init.sql, db/002_run_state.sql,
+// db/005_run_error.sql).
 // The Neon HTTP driver returns plain objects. These types name their columns.
 
 /** runs.status */
@@ -34,6 +35,8 @@ export interface RunRow {
   finished_at: string | null;
   next_start_at: string | null;
   qa_md: string | null;
+  /** Why the run failed, for example "Planning failed: ...". null for every other status. */
+  error: string | null;
 }
 
 export interface MissionRow {
@@ -83,10 +86,13 @@ export interface FindingRow {
   rerun_status: string | null;
 }
 
-/** A mission row without the encrypted Pine handle. This is what the API returns. */
-export type PublicMissionRow = Omit<MissionRow, "pine_enc">;
+/**
+ * A mission row without the encrypted Pine handle. This is what the API returns.
+ * has_computer tells the browser that a Computer was started for the mission (pine_enc is set).
+ */
+export type PublicMissionRow = Omit<MissionRow, "pine_enc"> & { has_computer: boolean };
 
 export function toPublicMission(row: MissionRow): PublicMissionRow {
-  const { pine_enc: _pineEnc, ...rest } = row;
-  return rest;
+  const { pine_enc: pineEnc, ...rest } = row;
+  return { ...rest, has_computer: pineEnc !== null && pineEnc !== undefined };
 }
