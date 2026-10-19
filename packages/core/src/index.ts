@@ -4,6 +4,18 @@ export { sql, databaseUrl, type Sql } from "./db";
 export { encrypt, decrypt, encryptionKey } from "./crypto";
 export { saveHandle, loadHandle, type PineHandle } from "./handles";
 export {
+  saveShot,
+  loadShot,
+  latestShotPaths,
+  shotPath,
+  shotIdFromPath,
+  pruneShots,
+  SHOT_RETENTION_DAYS,
+  type ShotInput,
+  type StoredShot,
+} from "./shots";
+export { alterOnce, ensureRunErrorColumn, isUndefinedColumn, withAddedColumn, withRunErrorColumn } from "./run-error";
+export {
   LENSES,
   MISSIONS_PER_RUN,
   LensSchema,

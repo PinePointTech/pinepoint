@@ -30,6 +30,7 @@ export function buildGoal(input: GoalInput): string {
     "5. If a page blocks you (for example a CAPTCHA or a login wall), stop and ask for help.",
     "6. If something looks wrong and no check covers it, write it in notes.",
     "7. Read the attachment qa.md first. Use only the test data in it.",
+    "8. When the goal says to do something again (for example, apply a code two times), do every part again. If a field is empty, type the value again before you click.",
     "Check list:",
     checkLines,
     "At the end, write result.json in this shape:",

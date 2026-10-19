@@ -1,0 +1,882 @@
+{
+  "run": {
+    "id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+    "pr_url": "https://github.com/vihuynh72/pinepoint/pull/10",
+    "owner": "vihuynh72",
+    "repo": "pinepoint",
+    "pr_number": 10,
+    "head_sha": "595931bec844090490fcff2f33c621dd219e216b",
+    "author": "vihuynh72",
+    "preview_url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+    "production_url": "https://pinepoint-demo-store.vercel.app/",
+    "status": "done",
+    "review_id": "5560828150",
+    "review_posted_at": "2026-10-18T00:43:42.824Z",
+    "cost_usd": null,
+    "started_at": "2026-10-18T00:40:23.152Z",
+    "finished_at": "2026-10-18T00:43:44.036Z",
+    "next_start_at": null
+  },
+  "missions": [
+    {
+      "id": "0d5a937c-2edc-4cee-b4b4-a5cb075ef9a7",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Access",
+      "persona": "Keyboard-only shopper",
+      "goal": "Use only the Tab and Enter keys. Add Oat oven glove, then go to Coupon code, type FREESHIP and press the Apply button. Read the message.",
+      "checks": [
+        {
+          "name": "Message after FREESHIP by keyboard",
+          "expected": "FREESHIP applied."
+        },
+        {
+          "name": "Total after FREESHIP",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:42:44.962Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "FREESHIP applied.",
+            "name": "Message after FREESHIP by keyboard",
+            "passed": true,
+            "expected": "FREESHIP applied."
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total after FREESHIP",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "4350a333-44d8-49c7-bf83-1b09667b6556",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Abuse",
+      "persona": "Shipping coupon repeater",
+      "goal": "Add Oat oven glove. Apply FREESHIP two times. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after second FREESHIP",
+          "expected": "Coupon already applied."
+        },
+        {
+          "name": "Total after FREESHIP two times",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:42:44.965Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "FREESHIP applied.",
+            "name": "Message after second FREESHIP",
+            "passed": false,
+            "expected": "Coupon already applied."
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total after FREESHIP two times",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "530ca2c8-0279-4d7c-a260-22d29e92f003",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Abuse",
+      "persona": "Coupon abuser",
+      "goal": "Add Sage linen apron. Apply SAVE10 two times. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after second SAVE10",
+          "expected": "Coupon already applied."
+        },
+        {
+          "name": "Total after SAVE10 two times",
+          "expected": "$21.60"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:26.859Z",
+      "kept": true,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "SAVE10 applied.",
+            "name": "Message after second SAVE10",
+            "passed": false,
+            "expected": "Coupon already applied."
+          },
+          {
+            "saw": "$19.44",
+            "name": "Total after SAVE10 two times",
+            "passed": false,
+            "expected": "$21.60"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "5f61c0fc-efa5-49fb-b51f-4d628736c602",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Flow",
+      "persona": "Big spender",
+      "goal": "Add all three products. Apply SAVE10. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after SAVE10",
+          "expected": "SAVE10 applied."
+        },
+        {
+          "name": "Total for all three products with SAVE10",
+          "expected": "$44.10"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 68,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:43.936Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "SAVE10 applied.",
+            "name": "Message after SAVE10",
+            "passed": true,
+            "expected": "SAVE10 applied."
+          },
+          {
+            "saw": "$44.10",
+            "name": "Total for all three products with SAVE10",
+            "passed": true,
+            "expected": "$44.10"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "ac22b33b-5af6-4f67-b97d-a4d910b4fcbd",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "UI",
+      "persona": "Shopper at the free shipping limit",
+      "goal": "Add Linen tea towel set only. Do not use any coupon. Read the Shipping line and the Total line.",
+      "checks": [
+        {
+          "name": "Shipping at the $20.00 limit",
+          "expected": "$0.00"
+        },
+        {
+          "name": "Total at the $20.00 limit",
+          "expected": "$20.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 69,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:26.842Z",
+      "kept": true,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "$4.00",
+            "name": "Shipping at the $20.00 limit",
+            "passed": false,
+            "expected": "$0.00"
+          },
+          {
+            "saw": "$20.00",
+            "name": "Total at the $20.00 limit",
+            "passed": true,
+            "expected": "$20.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "b1b7a2ee-4aec-4079-b8ec-bf37d9ba5459",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Safety",
+      "persona": "Shopper who guesses codes",
+      "goal": "Add Sage linen apron. Apply WELCOME. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message for unknown code",
+          "expected": "Coupon not valid."
+        },
+        {
+          "name": "Total stays the same",
+          "expected": "$24.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:26.812Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "Coupon not valid.",
+            "name": "Message for unknown code",
+            "passed": true,
+            "expected": "Coupon not valid."
+          },
+          {
+            "saw": "$24.00",
+            "name": "Total stays the same",
+            "passed": true,
+            "expected": "$24.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "dcc38766-0f01-4fdb-b334-0b17c33b839e",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "UI",
+      "persona": "Careful reader of the cart",
+      "goal": "Add Oat oven glove. Apply FREESHIP. Read the Shipping line and the Total line in the cart.",
+      "checks": [
+        {
+          "name": "Shipping line with FREESHIP",
+          "expected": "$0.00"
+        },
+        {
+          "name": "Total line",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 70,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:26.791Z",
+      "kept": true,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "Free",
+            "name": "Shipping line with FREESHIP",
+            "passed": false,
+            "expected": "$0.00"
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total line",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "f6f5f622-3676-4cb1-90af-0c717d1f6fb6",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Abuse",
+      "persona": "Sloppy typist",
+      "goal": "Add Oat oven glove. Type ' freeship ' in lower case with spaces around it in Coupon code. Click Apply. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message for messy FREESHIP",
+          "expected": "FREESHIP applied."
+        },
+        {
+          "name": "Total with free shipping",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:26.809Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "FREESHIP applied.",
+            "name": "Message for messy FREESHIP",
+            "passed": true,
+            "expected": "FREESHIP applied."
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total with free shipping",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "faabeb67-e038-47a8-b07a-5a50b301c0df",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Flow",
+      "persona": "Buyer who finishes an order",
+      "goal": "Add Oat oven glove. Apply FREESHIP. Click Place order. Read the confirmation.",
+      "checks": [
+        {
+          "name": "Order confirmation",
+          "expected": "Order placed"
+        },
+        {
+          "name": "Order total",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 66,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:40:23.357Z",
+      "finished_at": "2026-10-18T00:41:59.382Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "Order placed",
+            "name": "Order confirmation",
+            "passed": true,
+            "expected": "Order placed"
+          },
+          {
+            "saw": "Order total: $9.00",
+            "name": "Order total",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "c38cc89c-a82f-417c-80e0-f7745eb87907",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "production",
+      "parent_id": "530ca2c8-0279-4d7c-a260-22d29e92f003",
+      "lens": "Abuse",
+      "persona": "Coupon abuser",
+      "goal": "Add Sage linen apron. Apply SAVE10 two times. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after second SAVE10",
+          "expected": "Coupon already applied."
+        },
+        {
+          "name": "Total after SAVE10 two times",
+          "expected": "$21.60"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store.vercel.app/",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:41:29.192Z",
+      "finished_at": "2026-10-18T00:41:59.374Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "Coupon already applied.",
+            "name": "Message after second SAVE10",
+            "passed": true,
+            "expected": "Coupon already applied."
+          },
+          {
+            "saw": "$21.60",
+            "name": "Total after SAVE10 two times",
+            "passed": true,
+            "expected": "$21.60"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "c8d791e0-d304-43ae-ac8e-3255f9bdd44c",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "flake",
+      "parent_id": "dcc38766-0f01-4fdb-b334-0b17c33b839e",
+      "lens": "UI",
+      "persona": "Careful reader of the cart",
+      "goal": "Add Oat oven glove. Apply FREESHIP. Read the Shipping line and the Total line in the cart.",
+      "checks": [
+        {
+          "name": "Shipping line with FREESHIP",
+          "expected": "$0.00"
+        },
+        {
+          "name": "Total line",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 70,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:41:29.192Z",
+      "finished_at": "2026-10-18T00:42:44.984Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "Free",
+            "name": "Shipping line with FREESHIP",
+            "passed": false,
+            "expected": "$0.00"
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total line",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "445af9b4-d14e-4c39-ac52-872874f39d8b",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "flake",
+      "parent_id": "ac22b33b-5af6-4f67-b97d-a4d910b4fcbd",
+      "lens": "UI",
+      "persona": "Shopper at the free shipping limit",
+      "goal": "Add Linen tea towel set only. Do not use any coupon. Read the Shipping line and the Total line.",
+      "checks": [
+        {
+          "name": "Shipping at the $20.00 limit",
+          "expected": "$0.00"
+        },
+        {
+          "name": "Total at the $20.00 limit",
+          "expected": "$20.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 69,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:41:46.101Z",
+      "finished_at": "2026-10-18T00:42:44.985Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "$4.00",
+            "name": "Shipping at the $20.00 limit",
+            "passed": false,
+            "expected": "$0.00"
+          },
+          {
+            "saw": "$20.00",
+            "name": "Total at the $20.00 limit",
+            "passed": true,
+            "expected": "$20.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "b9c62804-f602-4175-ac4c-172ecf61f30d",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "preview",
+      "parent_id": null,
+      "lens": "Flow",
+      "persona": "Bargain hunter",
+      "goal": "Add Oat oven glove. Apply FREESHIP. Then apply SAVE10. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after SAVE10",
+          "expected": "SAVE10 applied."
+        },
+        {
+          "name": "Total with both coupons",
+          "expected": "$8.10"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 70,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "passed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:42:01.671Z",
+      "finished_at": "2026-10-18T00:43:12.602Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "SAVE10 applied.",
+            "name": "Message after SAVE10",
+            "passed": true,
+            "expected": "SAVE10 applied."
+          },
+          {
+            "saw": "$8.10",
+            "name": "Total with both coupons",
+            "passed": true,
+            "expected": "$8.10"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "e8d333d5-e167-44c5-a315-40695b596bdf",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "flake",
+      "parent_id": "530ca2c8-0279-4d7c-a260-22d29e92f003",
+      "lens": "Abuse",
+      "persona": "Coupon abuser",
+      "goal": "Add Sage linen apron. Apply SAVE10 two times. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after second SAVE10",
+          "expected": "Coupon already applied."
+        },
+        {
+          "name": "Total after SAVE10 two times",
+          "expected": "$21.60"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:42:01.671Z",
+      "finished_at": "2026-10-18T00:42:44.951Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "SAVE10 applied.",
+            "name": "Message after second SAVE10",
+            "passed": false,
+            "expected": "Coupon already applied."
+          },
+          {
+            "saw": "$19.44",
+            "name": "Total after SAVE10 two times",
+            "passed": false,
+            "expected": "$21.60"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "748e8a13-e4c4-4d54-9e28-d0e3d74878a6",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "flake",
+      "parent_id": "4350a333-44d8-49c7-bf83-1b09667b6556",
+      "lens": "Abuse",
+      "persona": "Shipping coupon repeater",
+      "goal": "Add Oat oven glove. Apply FREESHIP two times. Read the message and the total.",
+      "checks": [
+        {
+          "name": "Message after second FREESHIP",
+          "expected": "Coupon already applied."
+        },
+        {
+          "name": "Total after FREESHIP two times",
+          "expected": "$9.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 35,
+      "new_feature": true,
+      "url": "https://pinepoint-demo-store-git-feat-free-shipping-vi-s-team.vercel.app",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:42:47.558Z",
+      "finished_at": "2026-10-18T00:43:32.975Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "FREESHIP applied.",
+            "name": "Message after second FREESHIP",
+            "passed": false,
+            "expected": "Coupon already applied."
+          },
+          {
+            "saw": "$9.00",
+            "name": "Total after FREESHIP two times",
+            "passed": true,
+            "expected": "$9.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    },
+    {
+      "id": "d0fcbb75-09bd-466a-b980-608b99907472",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "kind": "production",
+      "parent_id": "ac22b33b-5af6-4f67-b97d-a4d910b4fcbd",
+      "lens": "UI",
+      "persona": "Shopper at the free shipping limit",
+      "goal": "Add Linen tea towel set only. Do not use any coupon. Read the Shipping line and the Total line.",
+      "checks": [
+        {
+          "name": "Shipping at the $20.00 limit",
+          "expected": "$0.00"
+        },
+        {
+          "name": "Total at the $20.00 limit",
+          "expected": "$20.00"
+        }
+      ],
+      "target_path": "apps/demo-store/lib/cart.ts",
+      "target_line": 69,
+      "new_feature": false,
+      "url": "https://pinepoint-demo-store.vercel.app/",
+      "status": "failed",
+      "screenshot_url": null,
+      "started_at": "2026-10-18T00:42:47.558Z",
+      "finished_at": "2026-10-18T00:43:22.660Z",
+      "kept": false,
+      "usage": null,
+      "result": {
+        "checks": [
+          {
+            "saw": "$4.00",
+            "name": "Shipping at the $20.00 limit",
+            "passed": false,
+            "expected": "$0.00"
+          },
+          {
+            "saw": "$20.00",
+            "name": "Total at the $20.00 limit",
+            "passed": true,
+            "expected": "$20.00"
+          }
+        ],
+        "blocked": false,
+        "terminalReason": "completed"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "5669de28-b03f-4036-bd02-8d8ac84bfead",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "mission_ids": [
+        "530ca2c8-0279-4d7c-a260-22d29e92f003"
+      ],
+      "level": "bug",
+      "title": "Second SAVE10 shows wrong message and total",
+      "steps": [
+        "Open the store.",
+        "Add the Sage linen apron to the cart.",
+        "Enter SAVE10. Click Apply.",
+        "Enter SAVE10 again. Click Apply."
+      ],
+      "expected": "The message shows \"Coupon already applied.\" The total shows $21.60.",
+      "saw": "The message shows \"SAVE10 applied.\" The total shows $19.44.",
+      "production_saw": "Message after second SAVE10: Coupon already applied. Total after SAVE10 two times: $21.60.",
+      "screenshot_url": null,
+      "path": "apps/demo-store/lib/cart.ts",
+      "line": 35,
+      "comment_id": null,
+      "decision": null,
+      "decided_at": null,
+      "fix_comment_id": null,
+      "rerun_status": null,
+      "fix": null
+    },
+    {
+      "id": "f891f3f8-7514-40b4-8bb3-f795aae24a16",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "mission_ids": [
+        "ac22b33b-5af6-4f67-b97d-a4d910b4fcbd"
+      ],
+      "level": "old_bug",
+      "title": "Shipping shows $4.00 at the $20.00 limit",
+      "steps": [
+        "Open the store.",
+        "Add Linen tea towel set to the cart."
+      ],
+      "expected": "The Shipping line shows $0.00.",
+      "saw": "The Shipping line shows $4.00. The Total line shows $20.00.",
+      "production_saw": "$4.00",
+      "screenshot_url": null,
+      "path": "apps/demo-store/lib/cart.ts",
+      "line": 69,
+      "comment_id": null,
+      "decision": null,
+      "decided_at": null,
+      "fix_comment_id": null,
+      "rerun_status": null,
+      "fix": null
+    },
+    {
+      "id": "aa1eac68-7808-4fb6-ae13-5f1d0d72bad2",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "mission_ids": [
+        "dcc38766-0f01-4fdb-b334-0b17c33b839e"
+      ],
+      "level": "bug",
+      "title": "Shipping line shows Free with FREESHIP",
+      "steps": [
+        "Open the store.",
+        "Add the Oat oven glove to the cart.",
+        "Enter FREESHIP in Coupon code.",
+        "Click Apply."
+      ],
+      "expected": "The Shipping line shows $0.00.",
+      "saw": "The Shipping line shows Free.",
+      "production_saw": null,
+      "screenshot_url": null,
+      "path": "apps/demo-store/lib/cart.ts",
+      "line": 70,
+      "comment_id": null,
+      "decision": null,
+      "decided_at": null,
+      "fix_comment_id": null,
+      "rerun_status": null,
+      "fix": null
+    },
+    {
+      "id": "f8a92be8-a417-45b0-8886-093fd292f48e",
+      "run_id": "05b37dc2-fb30-483a-820d-a1935400ed7a",
+      "mission_ids": [
+        "4350a333-44d8-49c7-bf83-1b09667b6556"
+      ],
+      "level": "bug",
+      "title": "FREESHIP shows the wrong message the second time",
+      "steps": [
+        "Open the store.",
+        "Add the Oat oven glove to the cart.",
+        "Enter FREESHIP. Click Apply.",
+        "Enter FREESHIP again. Click Apply."
+      ],
+      "expected": "The message shows \"Coupon already applied.\"",
+      "saw": "The message shows \"FREESHIP applied.\"",
+      "production_saw": null,
+      "screenshot_url": null,
+      "path": "apps/demo-store/lib/cart.ts",
+      "line": 35,
+      "comment_id": null,
+      "decision": "bug",
+      "decided_at": "2026-10-18T00:43:53.554Z",
+      "fix_comment_id": null,
+      "rerun_status": null,
+      "fix": null
+    }
+  ]
+}

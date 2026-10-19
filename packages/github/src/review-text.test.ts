@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bugCommentBody, summaryBody, type ReviewFinding } from "./review-text";
+import { absoluteImageUrl, bugCommentBody, summaryBody, type ReviewFinding } from "./review-text";
 
 const BASE = "https://pinepoint.example/";
 const RUN = "run-1";
@@ -118,4 +118,13 @@ test("bug comment without production value and screenshot", () => {
       "Decide in the session: Bug or Not a bug.",
     ].join("\n"),
   );
+});
+
+test("bugCommentBody makes a /api/shots picture path absolute on the app", () => {
+  const body = bugCommentBody(BASE, RUN, finding({ screenshot_url: "/api/shots/0b5e2f9a-0000-4000-8000-000000000001" }));
+  assert.match(body, /!\[Failure screenshot\]\(https:\/\/pinepoint\.example\/api\/shots\/0b5e2f9a-0000-4000-8000-000000000001\)/);
+});
+
+test("absoluteImageUrl keeps an absolute URL", () => {
+  assert.equal(absoluteImageUrl(BASE, "https://cdn.example/a.png"), "https://cdn.example/a.png");
 });

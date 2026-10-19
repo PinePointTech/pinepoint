@@ -65,6 +65,11 @@ export function summaryBody(input: SummaryInput): string {
   return lines.join("\n");
 }
 
+/** A picture path such as /api/shots/<id> made absolute on the app, since GitHub cannot load a relative URL. */
+export function absoluteImageUrl(appBaseUrl: string, url: string): string {
+  return url.startsWith("/") ? `${appBaseUrl.replace(/\/+$/, "")}${url}` : url;
+}
+
 /** The inline comment body for one Bug. */
 export function bugCommentBody(appBaseUrl: string, runId: string, f: ReviewFinding): string {
   const who = [f.persona, f.lens ? `${f.lens} lens` : null].filter(Boolean).join(", ");
@@ -73,7 +78,8 @@ export function bugCommentBody(appBaseUrl: string, runId: string, f: ReviewFindi
   lines.push("", "Steps:", ...numbered(f.steps), "");
   lines.push(`Expected: ${f.expected ?? ""}`, `Saw: ${f.saw ?? ""}`);
   if (f.production_saw != null) lines.push(`Production: ${f.production_saw}`);
-  if (f.screenshot_url) lines.push("", `![Failure screenshot](${f.screenshot_url})`);
+  // Pictures live at /api/shots/<id> on the app; GitHub needs the full URL.
+  if (f.screenshot_url) lines.push("", `![Failure screenshot](${absoluteImageUrl(appBaseUrl, f.screenshot_url)})`);
   lines.push(
     "",
     `[Open the paused session](${findingLink(appBaseUrl, runId, f.id)}). Take control. The cart is still full.`,

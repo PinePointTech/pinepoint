@@ -7,7 +7,7 @@
 // review posts once (the lock on runs.review_posted_at). So no extra lock is needed here.
 
 import { advanceRun } from "@pinepoint/runner";
-import { driveToken } from "@pinepoint/github/webhook";
+import { driveBaseUrl, driveToken } from "@pinepoint/github/webhook";
 import "./run-hooks";
 
 /** Time for the loop in one function call. maxDuration is 300 seconds; the rest leaves room for the completion hook (findings rewrite and review). */
@@ -63,19 +63,29 @@ export async function driveRun(runId: string, sliceEndsAt = Date.now() + DRIVE_S
   return chainDrive(runId);
 }
 
-/** Starts the next slice in a new function call. The drive route answers at once and works in after(). */
+/**
+ * Starts the next slice in a new function call. The drive route answers at once and works in after().
+ * The call goes to this deployment (driveBaseUrl): a preview run stays on the preview's code.
+ */
 export async function chainDrive(runId: string): Promise<DriveEnd> {
-  const base = process.env.APP_BASE_URL;
+  const base = driveBaseUrl();
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
   if (!base || !secret) {
-    console.error(`[drive] cannot chain run ${runId}: APP_BASE_URL or GITHUB_WEBHOOK_SECRET is not set`);
+    console.error(
+      `[drive] cannot chain run ${runId}: no base URL (APP_BASE_URL, VERCEL_BRANCH_URL or VERCEL_URL) or GITHUB_WEBHOOK_SECRET is not set`,
+    );
     return "chain_failed";
   }
-  const url = `${base.replace(/\/+$/, "")}/api/runs/${runId}/drive`;
+  const url = `${base}/api/runs/${runId}/drive`;
+  const headers: Record<string, string> = { [DRIVE_HEADER]: driveToken(secret, runId) };
+  // A preview deployment can sit behind Vercel Deployment Protection. Vercel sets this secret when
+  // "Protection Bypass for Automation" is on, and the header lets this server call through.
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypass) headers["x-vercel-protection-bypass"] = bypass;
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { [DRIVE_HEADER]: driveToken(secret, runId) },
+      headers,
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) {

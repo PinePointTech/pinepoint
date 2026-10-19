@@ -11,28 +11,43 @@ import {
   MessageSquareText,
   Play,
 } from "lucide-react";
-import { createRun, getRunStatus, listRuns, type WithFake } from "@/lib/app-api";
+import { ApiError, createRun, getRunStatus, listRuns, type WithFake } from "@/lib/app-api";
 import {
   TERMINAL_RUN_STATUSES,
   type Finding,
+  type Mission,
   type Run,
   type StatusResponse,
 } from "@/lib/app-types";
 import { SessionPanel, type FindingView, type StepShotView } from "@/components/session-panel";
-import { Activity } from "./activity";
+import { RunProgress, StartingRun } from "./activity";
 import { CostCard } from "./cost-card";
 import { MissionGroups } from "./mission-groups";
-import { findingFor, tileState } from "./tile-state";
+import { Spinner, useNow } from "./progress";
+import {
+  detailLine,
+  failedChecks,
+  findingFor,
+  flakePassed,
+  reasonOf,
+  tileState,
+  type TileContext,
+  type TileState,
+} from "./tile-state";
 
 const POLL_MS = 3000;
 
-// missions.result.steps: the runner's pictures of the screen after each step.
+// missions.result.step_shots: the runner's pictures of the screen after each step.
 function stepsOf(result: unknown): StepShotView[] {
-  const steps = (result as { steps?: unknown } | null)?.steps;
+  const steps = (result as { step_shots?: unknown } | null)?.step_shots;
   if (!Array.isArray(steps)) return [];
-  return steps.filter(
-    (s): s is StepShotView => !!s && typeof s === "object" && typeof (s as StepShotView).url === "string",
-  );
+  return steps
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && typeof (s as StepShotView).url === "string")
+    .map((s) => ({
+      url: s.url as string,
+      title: typeof s.title === "string" ? s.title : "",
+      at: typeof s.at === "string" ? s.at : null,
+    }));
 }
 
 const RUN_STATUS_LABEL: Record<Run["status"], string> = {
@@ -43,6 +58,27 @@ const RUN_STATUS_LABEL: Record<Run["status"], string> = {
   failed: "Failed",
   no_preview: "No preview",
 };
+
+// The line on a mission with no finding, in the session panel.
+function noFindingNote(state: TileState, mission: Mission, missions: Mission[]): string | null {
+  switch (state) {
+    case "rechecking":
+      return "A check failed. PinePoint runs the mission again to see if the failure repeats.";
+    case "check_failed":
+      return "A check failed. The findings come when every user ends.";
+    case "not_confirmed":
+      return flakePassed(mission, missions)
+        ? "The re-check passed, so PinePoint does not report it."
+        : "A check failed, but PinePoint does not report it.";
+    case "needs_you": {
+      // The person who takes control must see what the agent asked; on a phone the card is hidden.
+      const asks = detailLine("needs_you", mission, undefined, missions);
+      return asks ? `The agent needs help. Take control to help it. ${asks}` : null;
+    }
+    default:
+      return null;
+  }
+}
 
 // The session panel takes the finding in its own shape.
 function toFindingView(f: Finding | undefined, prUrl: string): FindingView | null {
@@ -72,6 +108,31 @@ function minutesBetween(start: string | null, end: string | null): string | null
   if (!Number.isFinite(ms) || ms < 0) return null;
   return `${(ms / 60000).toFixed(1)} min`;
 }
+
+const PR_URL = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
+
+// The click on Run, until the new run's first status arrives.
+interface Starting {
+  title: string;
+  at: number;
+  // Set when POST /api/runs answers.
+  runId: string | null;
+  existing: boolean;
+}
+
+function startingStage(s: Starting, now: number): string {
+  if (s.runId) return s.existing ? "Opening the run that is already going." : "Opening the run.";
+  // POST /api/runs reads the PR and answers in a few seconds. The page waits 30 seconds at most.
+  return now - s.at < 8000
+    ? "Reading the PR on GitHub."
+    : "The server is slow to answer. PinePoint waits up to 30 seconds.";
+}
+
+// The server's 500 text already starts with "Could not start the run". Do not say it two times.
+const startErrorText = (m: string) =>
+  /^(could not|cannot) start the run/i.test(m) ? m : `Cannot start the run: ${m}`;
+
+const PR_URL_HINT = "Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.";
 
 function Chip({ label, value, tone }: { label: string; value: string | number; tone: string }) {
   return (
@@ -114,12 +175,14 @@ export function Dashboard() {
 
   const [runs, setRuns] = useState<Run[]>([]);
   const [status, setStatus] = useState<WithFake<StatusResponse> | null>(null);
+  // A load failure (the run list or the status poll). The next good poll clears it.
   const [error, setError] = useState<string | null>(null);
+  // A note about the run start, or another failure of a click. The status poll does not clear it.
+  const [notice, setNotice] = useState<{ tone: "info" | "error"; text: string } | null>(null);
   const [prUrl, setPrUrl] = useState("");
-  const [starting, setStarting] = useState(false);
+  const [starting, setStarting] = useState<Starting | null>(null);
   const [missionId, setMissionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [, setNow] = useState(0);
   // A shared ?finding= link opens a finished run. Fake data skips the wait.
   const [complete] = useState(() => findingParam !== null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -133,11 +196,20 @@ export function Dashboard() {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
-  const usingFake = fakeParam || status?.fake === true;
+  // Only the status of the run in the URL shows. A late answer for the run before never does.
+  const view = status && status.run.id === runId ? status : null;
+  const usingFake = fakeParam || view?.fake === true;
+
+  // The newest query. startRun calls setQuery after an await, so it must not use the query
+  // of the render where Run was clicked.
+  const paramsRef = useRef(params);
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
 
   const setQuery = useCallback(
     (next: Record<string, string | null>) => {
-      const q = new URLSearchParams(params.toString());
+      const q = new URLSearchParams(paramsRef.current.toString());
       for (const [k, v] of Object.entries(next)) {
         if (v === null) q.delete(k);
         else q.set(k, v);
@@ -145,7 +217,7 @@ export function Dashboard() {
       const s = q.toString();
       router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
     },
-    [params, pathname, router],
+    [pathname, router],
   );
 
   const refreshRuns = useCallback(() => {
@@ -156,6 +228,8 @@ export function Dashboard() {
 
   useEffect(refreshRuns, [refreshRuns]);
 
+  // Bumped to poll the open run again after it ended, for example when the sample run restarts.
+  const [pollKey, setPollKey] = useState(0);
   // Poll the open run every 3 seconds until it ends.
   useEffect(() => {
     if (!runId) {
@@ -164,16 +238,21 @@ export function Dashboard() {
     }
     let stop = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The Last runs list shows each run's status, so refresh it when the open run moves on.
+    let lastStatus: string | null = null;
     const tick = async () => {
       try {
         const s = await getRunStatus(runId, { fake: fakeParam, complete });
         if (stop) return;
         setStatus(s);
         setError(null);
+        const moved = lastStatus !== null && lastStatus !== s.run.status;
+        lastStatus = s.run.status;
         if (TERMINAL_RUN_STATUSES.includes(s.run.status)) {
           refreshRuns();
           return;
         }
+        if (moved) refreshRuns();
       } catch (e) {
         if (stop) return;
         setError(`Cannot load the run: ${(e as Error).message}`);
@@ -185,54 +264,85 @@ export function Dashboard() {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [runId, fakeParam, complete, refreshRuns]);
+  }, [runId, fakeParam, complete, refreshRuns, pollKey]);
 
-  const runEnded = status ? TERMINAL_RUN_STATUSES.includes(status.run.status) : true;
-  // Keep the "minutes" chip moving while a run is going.
+  // The start card goes when the new run's status arrives, or when it cannot load.
   useEffect(() => {
-    if (runEnded) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [runEnded]);
+    if (!starting?.runId) return;
+    if (view?.run.id === starting.runId || error) setStarting(null);
+  }, [starting, view, error]);
+
+  const runEnded = view ? TERMINAL_RUN_STATUSES.includes(view.run.status) : true;
+  // Move the clocks (elapsed time, countdowns, the "minutes" chip) while something goes on.
+  const now = useNow(!runEnded || starting !== null);
 
   async function startRun(url: string) {
-    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(url)) {
-      setError("Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.");
+    const match = PR_URL.exec(url);
+    if (!match) {
+      setNotice({ tone: "error", text: PR_URL_HINT });
       return;
     }
-    setStarting(true);
+    setStarting({ title: `${match[1]}/${match[2]} #${match[3]}`, at: Date.now(), runId: null, existing: false });
     setError(null);
+    setNotice(null);
     try {
       const res = await createRun(url, { fake: fakeParam });
-      setStatus(null);
-      setMissionId(null);
-      setQuery({ run: res.runId, finding: null, fake: fakeParam || res.fake ? "1" : null });
+      // runId is the run in the URL when Run was clicked. The person cannot change it while
+      // the form waits, but they can open a mission card of that run.
+      const same = res.runId === runId;
+      const fake = fakeParam || res.fake ? "1" : null;
+      // The run already open keeps its drawer, its ?finding= and its view.
+      if (same) {
+        setQuery({ fake });
+        // A sample run restarts its clock on Run, and a finished run stopped its poll: poll again.
+        if (res.fake || (status && TERMINAL_RUN_STATUSES.includes(status.run.status))) setPollKey((k) => k + 1);
+      } else {
+        setMissionId(null);
+        setQuery({ run: res.runId, finding: null, fake });
+      }
+      if (res.existing) {
+        setNotice({ tone: "info", text: "A run for this commit is already going. You are watching it." });
+      }
+      setStarting((s) => (s ? { ...s, runId: res.runId, existing: res.existing } : s));
       refreshRuns();
     } catch (err) {
-      setError(`Cannot start the run: ${(err as Error).message}`);
-    } finally {
-      setStarting(false);
+      const text = startErrorText((err as Error).message);
+      setStarting(null);
+      if (err instanceof ApiError && err.runId) {
+        // The run row exists. Open it, so its status shows what happened.
+        if (err.runId !== runId) {
+          setMissionId(null);
+          setQuery({ run: err.runId, finding: null });
+        }
+      }
+      setNotice({ tone: "error", text });
+      // A slow server can still make the run. Then it shows in the list.
+      refreshRuns();
     }
   }
 
   function onRun(e: React.FormEvent) {
     e.preventDefault();
+    if (starting) return;
     startRun(prUrl.trim());
   }
 
   function openRun(id: string) {
     setMissionId(null);
+    setNotice(null);
     setQuery({ run: id, finding: null });
   }
 
-  const findings = status?.findings ?? [];
-  const missions = status?.missions ?? [];
+  const findings = view?.findings ?? [];
+  const missions = view?.missions ?? [];
   const previewMissions = missions.filter((m) => m.kind === "preview");
+  const context: TileContext = { run: view?.run ?? null, missions, now };
   const openFinding = findings.find((f) => f.id === findingParam);
   const panelMissionId = missionId ?? openFinding?.mission_ids?.[0] ?? null;
   const panelMission = missions.find((m) => m.id === panelMissionId);
   const panelFinding = openFinding ?? (panelMission ? findingFor(panelMission, findings) : undefined);
-  const panelOpen = status !== null && panelMissionId !== null;
+  const panelState = panelMission ? tileState(panelMission, panelFinding, context) : null;
+  const panelOpen = view !== null && panelMissionId !== null;
 
   function openMission(id: string) {
     const mission = missions.find((m) => m.id === id);
@@ -256,27 +366,28 @@ export function Dashboard() {
   }, [panelOpen]);
 
   async function copyRunLink() {
-    if (!status) return;
-    const link = `${window.location.origin}/app?run=${status.run.id}`;
+    if (!view) return;
+    const link = `${window.location.origin}/app?run=${view.run.id}`;
     try {
       await navigator.clipboard.writeText(link);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError(`Copy did not work. The link is ${link}`);
+      setNotice({ tone: "error", text: `Copy did not work. The link is ${link}` });
     }
   }
 
-  const states = previewMissions.map((m) => tileState(m, findingFor(m, findings)));
-  const ended = previewMissions.filter((m) => m.finished_at !== null).length;
-  const total = previewMissions.length;
+  const states = previewMissions.map((m) => tileState(m, findingFor(m, findings), context));
   const counts = {
     bugs: findings.filter((f) => f.level === "bug").length,
     possible: findings.filter((f) => f.level === "possible").length,
+    oldBugs: findings.filter((f) => f.level === "old_bug").length,
     passed: states.filter((s) => s === "passed").length,
-    blocked: states.filter((s) => s === "blocked").length,
+    notConfirmed: states.filter((s) => s === "not_confirmed").length,
+    couldNotRun: states.filter((s) => s === "could_not_run").length,
+    blocked: states.filter((s) => s === "blocked" || s === "timed_out").length,
   };
-  const minutes = status ? minutesBetween(status.run.started_at, status.run.finished_at) : null;
+  const minutes = view ? minutesBetween(view.run.started_at, view.run.finished_at) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 pb-16 sm:px-6 md:flex-row">
@@ -319,20 +430,23 @@ export function Dashboard() {
           <label htmlFor="pr-url" className="sr-only">
             PR URL
           </label>
+          {/* readOnly and aria-disabled, not disabled: a disabled control drops the focus to the body. */}
           <input
             id="pr-url"
             type="url"
             value={prUrl}
             onChange={(e) => setPrUrl(e.target.value)}
+            readOnly={starting !== null}
+            aria-disabled={starting !== null}
             placeholder="https://github.com/owner/repo/pull/1"
-            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30"
+            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30 aria-disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={starting}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-60"
+            aria-disabled={starting !== null}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-accent"
           >
-            <Play className="size-4" strokeWidth={2} aria-hidden />
+            {starting ? <Spinner className="size-4" /> : <Play className="size-4" strokeWidth={2} aria-hidden />}
             {starting ? "Starting" : "Run"}
           </button>
         </form>
@@ -343,7 +457,27 @@ export function Dashboard() {
           </p>
         )}
 
-        {!runId && (
+        {notice &&
+          (notice.tone === "error" ? (
+            <p role="alert" className="rounded-2xl bg-danger-soft px-4 py-3 text-sm text-danger">
+              {notice.text}
+            </p>
+          ) : (
+            <p role="status" className="rounded-2xl border border-accent/25 bg-accent-soft px-4 py-3 text-sm text-fg">
+              {notice.text}
+            </p>
+          ))}
+
+        {starting && (
+          <StartingRun
+            title={starting.title}
+            stage={startingStage(starting, now)}
+            seconds={Math.max(0, Math.floor((now - starting.at) / 1000))}
+            level={view ? 2 : 1}
+          />
+        )}
+
+        {!runId && !starting && (
           <section aria-labelledby="how-to" className="max-w-xl">
             <h1 id="how-to" className="text-2xl font-extrabold tracking-tight">
               Test a pull request
@@ -365,14 +499,14 @@ export function Dashboard() {
           </section>
         )}
 
-        {runId && !status && !error && <p className="text-sm text-muted">Loading the run.</p>}
+        {runId && !view && !error && !starting && <p className="text-sm text-muted">Loading the run.</p>}
 
-        {status && (
+        {view && (
           <>
             <section className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <h1 className="text-2xl font-extrabold tracking-tight">
-                  {status.run.owner}/{status.run.repo} #{status.run.pr_number}
+                  {view.run.owner}/{view.run.repo} #{view.run.pr_number}
                 </h1>
                 {usingFake && (
                   <span className="rounded-full bg-amber-100 px-3 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
@@ -387,17 +521,17 @@ export function Dashboard() {
               )}
 
               <div className="flex flex-wrap gap-2">
-                <QuickLink href={status.run.pr_url} icon={GitPullRequest}>
+                <QuickLink href={view.run.pr_url} icon={GitPullRequest}>
                   Open the PR
                 </QuickLink>
-                {status.run.preview_url && (
-                  <QuickLink href={status.run.preview_url} icon={ExternalLink}>
+                {view.run.preview_url && (
+                  <QuickLink href={view.run.preview_url} icon={ExternalLink}>
                     Open the preview
                   </QuickLink>
                 )}
-                {status.run.review_id ? (
+                {view.run.review_id ? (
                   <QuickLink
-                    href={`${status.run.pr_url}#pullrequestreview-${status.run.review_id}`}
+                    href={`${view.run.pr_url}#pullrequestreview-${view.run.review_id}`}
                     icon={MessageSquareText}
                   >
                     Open the PR review
@@ -425,32 +559,20 @@ export function Dashboard() {
                 </button>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-3 text-sm">
-                  <span className="font-semibold">{RUN_STATUS_LABEL[status.run.status] ?? status.run.status}</span>
-                  <span className="text-muted tabular-nums">
-                    {total > 0 ? `${ended} of ${total} missions done` : "Writing the missions"}
-                  </span>
-                </div>
-                <progress
-                  className="h-2.5 w-full appearance-none overflow-hidden rounded-full [&::-moz-progress-bar]:rounded-full [&::-moz-progress-bar]:bg-accent [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-surface-2 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-accent"
-                  max={Math.max(total, 1)}
-                  value={ended}
-                  aria-label="Missions done"
+              {view.run.status !== "no_preview" && (
+                <RunProgress
+                  run={view.run}
+                  missions={missions}
+                  statusLabel={RUN_STATUS_LABEL[view.run.status] ?? view.run.status}
+                  now={now}
                 />
-              </div>
+              )}
 
-              {!runEnded && (
-                <Activity
-                  status={status.run.status}
-                  running={previewMissions.filter((m) => m.status === "running").length}
-                  total={total}
-                  seconds={
-                    status.run.started_at
-                      ? Math.max(0, Math.round((Date.now() - Date.parse(status.run.started_at)) / 1000))
-                      : null
-                  }
-                />
+              {view.run.status === "failed" && (
+                <div className="rounded-2xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm" data-testid="run-error">
+                  <p className="font-semibold text-danger">The run failed.</p>
+                  <p className="mt-1 break-words text-fg">{view.run.error?.trim() || "PinePoint has no reason for it."}</p>
+                </div>
               )}
 
               <ul className="flex flex-wrap gap-2" aria-label="Run summary">
@@ -460,7 +582,16 @@ export function Dashboard() {
                   value={counts.possible}
                   tone="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
                 />
+                {counts.oldBugs > 0 && (
+                  <Chip label="Old bugs" value={counts.oldBugs} tone="border-border bg-surface-2 text-muted" />
+                )}
                 <Chip label="Passed" value={counts.passed} tone="border-accent/30 bg-accent-soft text-accent" />
+                {counts.notConfirmed > 0 && (
+                  <Chip label="Not confirmed" value={counts.notConfirmed} tone="border-border bg-surface text-muted" />
+                )}
+                {counts.couldNotRun > 0 && (
+                  <Chip label="Could not run" value={counts.couldNotRun} tone="border-border bg-surface text-muted" />
+                )}
                 <Chip label="Blocked" value={counts.blocked} tone="border-border bg-surface text-muted" />
                 {minutes && (
                   <Chip
@@ -472,7 +603,7 @@ export function Dashboard() {
               </ul>
             </section>
 
-            {status.run.status === "no_preview" && (
+            {view.run.status === "no_preview" && (
               <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm">
                 This PR has no preview URL. PinePoint cannot test it.
               </p>
@@ -481,11 +612,13 @@ export function Dashboard() {
             <MissionGroups
               missions={missions}
               findings={findings}
+              run={view.run}
+              now={now}
               selectedId={panelMissionId}
               onOpen={openMission}
             />
 
-            <CostCard run={status.run} missions={missions} />
+            <CostCard run={view.run} missions={missions} />
           </>
         )}
       </main>
@@ -494,6 +627,8 @@ export function Dashboard() {
         ref={dialogRef}
         aria-label="Session"
         onCancel={(e) => {
+          // A cancel from the picture viewer inside the drawer is not for the drawer.
+          if (e.target !== e.currentTarget) return;
           // Esc that leaves full screen must not also close the drawer.
           if (document.fullscreenElement) {
             e.preventDefault();
@@ -502,7 +637,9 @@ export function Dashboard() {
             e.preventDefault();
           }
         }}
-        onClose={() => {
+        onClose={(e) => {
+          // The picture viewer is a dialog too. Its close event must not close the drawer.
+          if (e.target !== e.currentTarget) return;
           if (panelOpen) closePanel();
         }}
         onClick={(e) => {
@@ -511,14 +648,23 @@ export function Dashboard() {
         }}
         className="m-0 ml-auto h-dvh max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-bg p-4 text-fg shadow-2xl backdrop:bg-fg/15 sm:p-6 md:w-[58%] md:rounded-l-[20px] lg:w-[52%]"
       >
-        {panelOpen && status && panelMissionId && (
+        {panelOpen && view && panelMissionId && (
           <SessionPanel
             key={panelMissionId}
-            runId={status.run.id}
+            runId={view.run.id}
             missionId={panelMissionId}
-            finding={toFindingView(panelFinding, status.run.pr_url)}
+            finding={toFindingView(panelFinding, view.run.pr_url)}
             lastScreenshotUrl={panelMission?.screenshot_url ?? null}
             steps={stepsOf(panelMission?.result)}
+            missionStatus={panelMission?.status}
+            kept={panelMission?.kept}
+            hasComputer={panelMission?.has_computer}
+            startedAt={panelMission?.started_at ?? null}
+            finishedAt={panelMission?.finished_at ?? null}
+            nextStartAt={view.run.next_start_at ?? null}
+            reason={panelMission ? reasonOf(panelMission) : null}
+            failedChecks={panelMission ? failedChecks(panelMission) : []}
+            note={panelMission && panelState ? noFindingNote(panelState, panelMission, missions) : null}
             onClose={closePanel}
             fake={usingFake}
           />

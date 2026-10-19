@@ -1,4 +1,4 @@
-// POST /api/runs/[id]/drive: one more slice of driving for a run that the GitHub webhook started.
+// POST /api/runs/[id]/drive: one more slice of driving for a run that POST /api/runs or the GitHub webhook started.
 // Only the server calls it (lib/drive.ts chains to it). The x-pinepoint-drive header must be the
 // HMAC of the run id under GITHUB_WEBHOOK_SECRET. It answers at once and works in after().
 

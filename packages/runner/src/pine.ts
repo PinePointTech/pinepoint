@@ -6,14 +6,18 @@ import {
   Binding,
   Client,
   Credentials,
+  LifecycleError,
+  NotFoundError,
+  RuntimeFailedError,
+  RuntimeGoneError,
+  TokenRejectedError,
   type AgentTurn,
   type Artifact,
   type Computer,
   type ProjectPolicy,
   type Session,
 } from "@pinesandbox/computer";
-import { put } from "@vercel/blob";
-import { MissionResultSchema, type MissionResult, type PineHandle } from "@pinepoint/core";
+import { MissionResultSchema, saveShot, type MissionResult, type PineHandle } from "@pinepoint/core";
 import { buildGoal, type GoalInput } from "./goal";
 
 /** One mission may run this long (plan section 5, rule 7). It is also the turn's own wall budget. */
@@ -54,6 +58,29 @@ export async function concurrencyLimit(): Promise<number> {
     cachedPolicy = { value: await pineClient().projectPolicy(), at: now };
   }
   return cachedPolicy.value.maxConcurrentComputers ?? DEFAULT_CONCURRENCY_LIMIT;
+}
+
+/** The error names that mean the Computer is stopped or deleted. Matched by name too: two bundles can hold two copies of the SDK classes. */
+const GONE_ERROR_NAMES: ReadonlySet<string> = new Set(["RuntimeGoneError", "NotFoundError", "TokenRejectedError"]);
+
+/** RuntimeFailedError states that mean the Computer never runs again. "unavailable" can pass, so it is not here. */
+const GONE_RUNTIME_STATES: ReadonlySet<string> = new Set(["terminated", "failed"]);
+
+/**
+ * True when a Pine error means the mission's Computer is gone: RuntimeGoneError, NotFoundError,
+ * TokenRejectedError, another lifecycle error with status 404, or a RuntimeFailedError (from a
+ * lifecycle operation) in state terminated or failed. The orchestrator ends the mission on it;
+ * the desktop routes answer 410 computer_stopped.
+ */
+export function isComputerGone(err: unknown): boolean {
+  if (err instanceof RuntimeGoneError || err instanceof NotFoundError || err instanceof TokenRejectedError) return true;
+  const e = err as { name?: unknown; status?: unknown; state?: unknown } | null | undefined;
+  if (!e || typeof e !== "object") return false;
+  if (typeof e.name === "string" && GONE_ERROR_NAMES.has(e.name)) return true;
+  if (err instanceof RuntimeFailedError || e.name === "RuntimeFailedError") {
+    return typeof e.state === "string" && GONE_RUNTIME_STATES.has(e.state);
+  }
+  return err instanceof LifecycleError && e.status === 404;
 }
 
 /** Rebuilds the Computer and the session from a saved handle. No request is made. */
@@ -222,21 +249,18 @@ export async function collectArtifacts(handle: PineHandle): Promise<MissionArtif
   return { result, resultError, screenshot: screenshot ?? null };
 }
 
-/** Uploads fail.png to Vercel Blob with public access (plan section 7). Returns the public URL. */
+/**
+ * Saves fail.png in the mission_shots table and returns its path (/api/shots/<id>).
+ * The pictures used to go to Vercel Blob; its token stopped working when the project changed teams,
+ * and every upload failed with "Access denied". Postgres needs no extra credential.
+ */
 export async function uploadScreenshot(missionId: string, bytes: Uint8Array): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("BLOB_READ_WRITE_TOKEN is not set. Put the Vercel Blob token in .env.local.");
-  }
-  const blob = await put(`missions/${missionId}/fail.png`, Buffer.from(bytes), {
-    access: "public",
-    contentType: "image/png",
-    allowOverwrite: true,
-  });
-  return blob.url;
+  return saveShot({ missionId, idx: 0, mediaType: "image/png", data: bytes, title: "Failure screen" });
 }
 
-/** One picture of the screen after an agent step, stored in Vercel Blob. Saved in missions.result.steps. */
+/** One picture of the screen after an agent step. Saved in missions.result.step_shots (result.steps holds the agent's own text steps). */
 export interface StepShot {
+  /** /api/shots/<id> */
   url: string;
   /** The step's title from Pine, for example "Click Add to cart". Empty when the frame has no step. */
   title: string;
@@ -246,15 +270,13 @@ export interface StepShot {
 
 /** At most this many step pictures are kept for one mission. The last picture is always kept. */
 export const MAX_STEP_SHOTS = 12;
+/** A frame smaller than this is a blank screen (a white 1911x954 WebP is about 3.8 KB). */
+export const MIN_FRAME_BYTES = 6_000;
+/** How long the last-screen fallback waits for drive.screenshot. It runs inside a status call. */
+export const LAST_SCREEN_TIMEOUT_MS = 5_000;
 /** Event pages read for one turn at most. Each page holds up to EVENTS_PAGE_LIMIT events. */
 const MAX_EVENT_PAGES = 20;
 const EVENTS_PAGE_LIMIT = 100;
-
-function extFor(mediaType: string): string {
-  if (mediaType.includes("jpeg") || mediaType.includes("jpg")) return "jpg";
-  if (mediaType.includes("webp")) return "webp";
-  return "png";
-}
 
 /** Keeps `max` items spread over the list, with the first and the last always in. Exported for the tests. */
 export function sampleEvenly<T>(items: T[], max: number): T[] {
@@ -268,12 +290,12 @@ export function sampleEvenly<T>(items: T[], max: number): T[] {
 }
 
 /**
- * Reads the turn's `frame` events (Pine's picture of the screen after each step), uploads up to
- * MAX_STEP_SHOTS of them to Vercel Blob and returns their public URLs in step order.
- * Call it before the Computer is stopped. Returns [] when the session has no frames or a read fails.
+ * Reads the turn's `frame` events (Pine's picture of the screen after each step), saves up to
+ * MAX_STEP_SHOTS of them in mission_shots and returns their paths in step order. When the turn has
+ * no frames, it takes one screenshot of the screen as it is. Call it before the Computer is stopped:
+ * a stopped Computer answers every read with RuntimeGoneError. Returns [] when nothing could be read.
  */
 export async function collectStepShots(handle: PineHandle, missionId: string): Promise<StepShot[]> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return [];
   const { session } = rebuild(handle);
   const frames: Array<{ data: Uint8Array; mediaType: string; title: string; at: string | null }> = [];
   try {
@@ -299,22 +321,41 @@ export async function collectStepShots(handle: PineHandle, missionId: string): P
     console.warn(`[runner] could not read frames for mission ${missionId}: ${(err as Error).message}`);
   }
 
+  // Pine's first frame is often the blank browser before the first page loads (about 4 KB of white WebP).
+  // Drop such near-empty pictures when the turn has real ones.
+  const real = frames.filter((f) => f.data.byteLength >= MIN_FRAME_BYTES);
+  if (real.length > 0 && real.length < frames.length) frames.splice(0, frames.length, ...real);
+
+  if (frames.length === 0) {
+    // No frame events came back. Take one picture of the screen as it is now, so the mission has a last screen.
+    try {
+      const shot = await session.drive.screenshot({ signal: AbortSignal.timeout(LAST_SCREEN_TIMEOUT_MS) });
+      if (shot.screenshot) {
+        frames.push({ data: Buffer.from(shot.screenshot, "base64"), mediaType: "image/png", title: "Last screen", at: new Date().toISOString() });
+      }
+    } catch (err) {
+      console.warn(`[runner] could not take the last screenshot for mission ${missionId}: ${(err as Error).message}`);
+    }
+  }
+
   const picked = sampleEvenly(frames, MAX_STEP_SHOTS);
-  const uploaded = await Promise.all(
+  const saved = await Promise.all(
     picked.map(async (f, i) => {
       try {
-        const name = `missions/${missionId}/steps/${String(i + 1).padStart(2, "0")}.${extFor(f.mediaType)}`;
-        const blob = await put(name, Buffer.from(f.data), {
-          access: "public",
-          contentType: f.mediaType,
-          allowOverwrite: true,
+        const url = await saveShot({
+          missionId,
+          idx: i + 1,
+          mediaType: f.mediaType,
+          data: f.data,
+          title: f.title,
+          observedAt: f.at,
         });
-        return { url: blob.url, title: f.title, at: f.at } satisfies StepShot;
+        return { url, title: f.title, at: f.at } satisfies StepShot;
       } catch (err) {
-        console.warn(`[runner] step picture upload failed for mission ${missionId}: ${(err as Error).message}`);
+        console.warn(`[runner] could not save step picture ${i + 1} for mission ${missionId}: ${(err as Error).message}`);
         return null;
       }
     }),
   );
-  return uploaded.filter((s): s is StepShot => s !== null);
+  return saved.filter((s): s is StepShot => s !== null);
 }

@@ -1,9 +1,12 @@
 // startRun and advanceRun (VI-10). Each call does a short slice of work and returns.
-// The dashboard polls GET /api/runs/[id]/status every 3 seconds; that poll is what drives a run.
+// The dashboard polls GET /api/runs/[id]/status every 3 seconds; that poll and lib/drive.ts in
+// apps/web drive a run. The status route skips the Computer starts and calls startQueued in after().
 //
 // Every state change is a conditional update on the current status, so two status calls at the
 // same time cannot start one mission two times or record one end state two times. The Neon HTTP
 // driver sends one statement per request, which is why no code here relies on a transaction.
+// A change that must not be seen half done (an end state and its follow-up missions) is one statement.
+// Computer starts for one run go through a lease (start-lease.ts), so only one call starts them at a time.
 
 import { CapacityExceededError, CreateRateLimitedError, type AgentTurn } from "@pinesandbox/computer";
 import {
@@ -11,27 +14,48 @@ import {
   saveHandle,
   sql,
   toPublicMission,
+  withRunErrorColumn,
   type FindingRow,
   type MissionRow,
   type MissionStatus,
   type PineHandle,
   type PublicMissionRow,
   type RunRow,
+  type RunStatus,
 } from "@pinepoint/core";
-import { START_GRACE_MS, decideTurn, followUpsFor, freeSlots, runIsComplete, shouldKeep } from "./decide";
+import {
+  PLANNING_TIMEOUT_ERROR,
+  START_GRACE_MS,
+  decideTurn,
+  followUpsFor,
+  keptToRelease,
+  needsStarts,
+  planningTimedOut,
+  releaseDelayMs,
+  runErrorText,
+  runIsComplete,
+  shouldKeep,
+  slotsToFill,
+  type FollowUp,
+} from "./decide";
 import {
   cancelMission,
   collectArtifacts,
   concurrencyLimit,
+  isComputerGone,
   pollMission,
   startMission,
   stopMission,
   uploadScreenshot,
   collectStepShots,
 } from "./pine";
+import { dropStartLease, LeaseUnavailableError, takeStartLease } from "./start-lease";
+import { runStartPool, type StartOutcome } from "./start-pool";
 
 /** The gap between two Computer creates, so one run does not trip the per-minute create limit (plan risk 5). */
 export const START_GAP_MS = 300;
+/** Computer starts that run at the same time. One start takes about 8 s, so 6 starts take about 16 s, not 50 s. */
+export const START_CONCURRENCY = 3;
 
 /** How long one status call waits for each running turn. */
 export const POLL_TIMEOUT_MS = 1000;
@@ -71,10 +95,13 @@ async function loadFindings(runId: string): Promise<FindingRow[]> {
 }
 
 export async function snapshot(runId: string): Promise<RunSnapshot | null> {
-  const run = await loadRun(runId);
-  if (!run) return null;
+  const loaded = await loadRun(runId);
+  if (!loaded) return null;
   const [missions, findings] = await Promise.all([loadMissions(runId), loadFindings(runId)]);
-  return { run, missions: missions.map(toPublicMission), findings };
+  // The start lease is internal (start-lease.ts). It does not go to the client.
+  const { start_lease_until: _lease, ...run } = loaded as RunRow & { start_lease_until?: unknown };
+  // runs.error is missing until the first failure adds the column (core/run-error.ts). Send null then.
+  return { run: { ...run, error: run.error ?? null }, missions: missions.map(toPublicMission), findings };
 }
 
 /** Computers in use across all runs: running missions plus kept ones from the last day (their idle timeout). */
@@ -141,60 +168,91 @@ function isCapacityExceeded(err: unknown): boolean {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Starts the claimed missions one after another with a short gap. On CreateRateLimitedError the run
+ * Starts the claimed missions, START_CONCURRENCY at a time with a short gap. On CreateRateLimitedError the run
  * waits `retryAfterSeconds` and the rest go back to the queue. Returns how many started.
  */
 async function startClaimed(run: RunRow, claimed: MissionRow[]): Promise<number> {
-  let started = 0;
-  for (let i = 0; i < claimed.length; i += 1) {
-    const mission = claimed[i]!;
-    if (i > 0) await sleep(START_GAP_MS);
-    try {
-      const handle = await startMission({
-        missionId: mission.id,
-        persona: mission.persona ?? "Visitor",
-        lens: mission.lens ?? "Flow",
-        goal: mission.goal ?? "Open the page and read it.",
-        checks: mission.checks ?? [],
-        url: mission.url ?? run.preview_url ?? "",
-        qaMd: run.qa_md ?? "",
-        metadata: { runId: run.id, kind: mission.kind },
-      });
-      await saveHandle(mission.id, handle);
-      started += 1;
-    } catch (err) {
-      if (isRateLimited(err)) {
-        const seconds = Math.max(1, Math.ceil(err.retryAfterSeconds || 5));
-        await sql()`update runs set next_start_at = now() + make_interval(secs => ${seconds}) where id = ${run.id}`;
-        await Promise.all(claimed.slice(i).map((m) => requeue(m.id)));
-        break;
+  const { started, notLaunched } = await runStartPool(
+    claimed,
+    async (mission): Promise<StartOutcome> => {
+      try {
+        const handle = await startMission({
+          missionId: mission.id,
+          persona: mission.persona ?? "Visitor",
+          lens: mission.lens ?? "Flow",
+          goal: mission.goal ?? "Open the page and read it.",
+          checks: mission.checks ?? [],
+          url: mission.url ?? run.preview_url ?? "",
+          qaMd: run.qa_md ?? "",
+          metadata: { runId: run.id, kind: mission.kind },
+        });
+        await saveHandle(mission.id, handle);
+        return "started";
+      } catch (err) {
+        if (isRateLimited(err)) {
+          const seconds = Math.max(1, Math.ceil(err.retryAfterSeconds || 5));
+          await sql()`update runs set next_start_at = now() + make_interval(secs => ${seconds}) where id = ${run.id}`;
+          await requeue(mission.id);
+          return "stop";
+        }
+        if (isCapacityExceeded(err)) {
+          await requeue(mission.id);
+          return "stop";
+        }
+        await markError(mission.id, `Could not start the Computer: ${(err as Error).message}`);
+        return "failed";
       }
-      if (isCapacityExceeded(err)) {
-        await Promise.all(claimed.slice(i).map((m) => requeue(m.id)));
-        break;
-      }
-      await markError(mission.id, `Could not start the Computer: ${(err as Error).message}`);
-    }
-  }
+    },
+    { concurrency: START_CONCURRENCY, gapMs: START_GAP_MS },
+  );
+  await Promise.all(notLaunched.map((m) => requeue(m.id)));
   return started;
 }
 
-/** Fills the free Computer slots with queued missions of this run. Returns how many started. */
+/**
+ * Fills the free Computer slots with queued missions of this run, at most MAX_STARTS_PER_CALL in
+ * one call. Returns how many started. Only the call that holds the run's start lease starts
+ * Computers; the others return 0. When the lease cannot be read at all (the column is missing and
+ * cannot be added), the call goes on without it, as before the lease existed.
+ */
 async function fillSlots(run: RunRow): Promise<number> {
   if (run.next_start_at && new Date(run.next_start_at).getTime() > Date.now()) {
     return 0;
   }
-  const [limit, inUse] = await Promise.all([concurrencyLimit(), computersInUse()]);
-  const free = freeSlots(limit, inUse);
-  if (free === 0) return 0;
-  const claimed = await claimQueued(run.id, free);
-  if (claimed.length === 0) return 0;
-  return startClaimed(run, claimed);
+  // A string: this call holds the lease until that time. null: another call holds it.
+  // undefined: the lease column cannot exist on this database, so go on without a lease.
+  let lease: string | null | undefined;
+  try {
+    lease = await takeStartLease(run.id);
+  } catch (err) {
+    if (!(err instanceof LeaseUnavailableError)) {
+      // A passing database error: start nothing in this call. The next poll tries again.
+      console.warn(`[runner] could not take the start lease of run ${run.id}: ${(err as Error).message}`);
+      return 0;
+    }
+    console.warn(`[runner] no start lease column for run ${run.id}, starting without a lease: ${err.message}`);
+    lease = undefined;
+  }
+  if (lease === null) return 0;
+  try {
+    const [limit, inUse] = await Promise.all([concurrencyLimit(), computersInUse()]);
+    const n = slotsToFill(limit, inUse);
+    if (n === 0) return 0;
+    const claimed = await claimQueued(run.id, n);
+    if (claimed.length === 0) return 0;
+    return await startClaimed(run, claimed);
+  } finally {
+    if (lease) {
+      await dropStartLease(run.id, lease).catch((err: Error) =>
+        console.warn(`[runner] could not drop the start lease of run ${run.id}: ${err.message}`),
+      );
+    }
+  }
 }
 
 /**
- * Starts the first missions of a run, up to the project limit. POST /api/runs calls it once.
- * The status route starts the rest.
+ * Starts the first missions of a run, up to the project limit. The background step of POST
+ * /api/runs and the webhook calls it once, after addMissions. The drive loop and startQueued start the rest.
  */
 export async function startRun(runId: string): Promise<number> {
   const run = await loadRun(runId);
@@ -203,25 +261,74 @@ export async function startRun(runId: string): Promise<number> {
   return fillSlots(run);
 }
 
+/**
+ * Starts queued missions of a running run in the free Computer slots. Returns how many started,
+ * 0 for a missing run or a run that is not running. The status route calls it in after(), so a
+ * poll never waits on Computer starts (about 8 seconds each). Safe with many callers at once:
+ * only the holder of the run's start lease starts Computers, at most MAX_STARTS_PER_CALL of them,
+ * and claimQueued takes each row with `for update skip locked`, so two calls never start one mission.
+ */
+export async function startQueued(runId: string): Promise<number> {
+  const run = await loadRun(runId);
+  if (!run || run.status !== "running") return 0;
+  return fillSlots(run);
+}
+
+// ---------- failing ----------
+
+/**
+ * Moves the run from `from` to `failed` and writes why in runs.error. Returns true when this call
+ * made the change, false when the run was not in `from` any more.
+ */
+export async function failRun(runId: string, error: string, from: RunStatus): Promise<boolean> {
+  const rows = await withRunErrorColumn(
+    () => sql()`
+      update runs set status = 'failed', error = ${error}, finished_at = now()
+      where id = ${runId} and status = ${from}
+      returning id
+    `,
+  );
+  return rows.length > 0;
+}
+
 // ---------- advancing ----------
 
-/** Records an end state. Returns true when this call made the change, false when another call did. */
+/**
+ * Records an end state and queues the follow-up missions (the flake and production runs of a
+ * failed preview) in one statement. Returns true when this call made the change, false when
+ * another call did. One statement, because no other call may see the mission ended while its
+ * follow-ups do not exist yet: the run would look complete, and the findings would be built
+ * without the flake verdict.
+ */
 async function recordEnd(
   missionId: string,
   status: MissionStatus,
   result: Record<string, unknown> | null,
   usage: unknown,
   kept: boolean,
+  followUps: FollowUp[] = [],
 ): Promise<boolean> {
   const resultJson = result ? JSON.stringify(result) : null;
   const usageJson = usage ? JSON.stringify(usage) : null;
-  const rows = await sql()`
-    update missions
-    set status = ${status}, result = ${resultJson}::jsonb, usage = ${usageJson}::jsonb, kept = ${kept}, finished_at = now()
-    where id = ${missionId} and status = 'running'
-    returning id
-  `;
-  return rows.length > 0;
+  const followUpsJson = JSON.stringify(followUps.map((f) => ({ kind: f.kind, url: f.url })));
+  const rows = (await sql()`
+    with ended as (
+      update missions
+      set status = ${status}, result = ${resultJson}::jsonb, usage = ${usageJson}::jsonb, kept = ${kept}, finished_at = now()
+      where id = ${missionId} and status = 'running'
+      returning id, run_id, lens, persona, goal, checks, target_path, target_line, new_feature
+    ), queued as (
+      insert into missions (run_id, kind, parent_id, lens, persona, goal, checks, target_path, target_line, new_feature, url, status)
+      select e.run_id, f.kind, e.id, e.lens, e.persona, e.goal, coalesce(e.checks, '[]'::jsonb),
+             e.target_path, e.target_line, e.new_feature, f.url, 'queued'
+      from ended e
+      cross join jsonb_to_recordset(${followUpsJson}::jsonb) as f(kind text, url text)
+      where not exists (select 1 from missions c where c.parent_id = e.id and c.kind = f.kind)
+      returning id
+    )
+    select count(*)::int as won from ended
+  `) as Array<{ won: number }>;
+  return (rows[0]?.won ?? 0) > 0;
 }
 
 async function release(handle: PineHandle, missionId: string): Promise<void> {
@@ -238,18 +345,6 @@ async function releaseParentIfFlakePassed(mission: MissionRow, status: MissionSt
   if (mission.kind !== "flake" || status !== "passed" || !mission.parent_id) return;
   const parentHandle = await loadHandle(mission.parent_id);
   if (parentHandle) await release(parentHandle, mission.parent_id);
-}
-
-async function queueFollowUps(run: RunRow, mission: MissionRow): Promise<void> {
-  for (const f of followUpsFor(mission, run)) {
-    const checks = JSON.stringify(mission.checks ?? []);
-    await sql()`
-      insert into missions (run_id, kind, parent_id, lens, persona, goal, checks, target_path, target_line, new_feature, url, status)
-      select ${run.id}, ${f.kind}, ${mission.id}, ${mission.lens}, ${mission.persona}, ${mission.goal}, ${checks}::jsonb,
-             ${mission.target_path}, ${mission.target_line}, ${mission.new_feature}, ${f.url}, 'queued'
-      where not exists (select 1 from missions where parent_id = ${mission.id} and kind = ${f.kind})
-    `;
-  }
 }
 
 /** Advances one running mission by at most one second. */
@@ -269,9 +364,7 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
   try {
     turn = await pollMission(handle, POLL_TIMEOUT_MS);
   } catch (err) {
-    const name = (err as Error).name;
-    const gone = name === "RuntimeGoneError" || name === "NotFoundError" || name === "TokenRejectedError";
-    if (gone) {
+    if (isComputerGone(err)) {
       if (await recordEnd(mission.id, "error", { reason: `The Computer is gone: ${(err as Error).message}` }, null, false)) {
         return;
       }
@@ -299,7 +392,9 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
   if (decision.status === null) return;
 
   const kept = shouldKeep(decision.status, mission.kind, await keptFailedInRun(run.id));
-  const won = await recordEnd(mission.id, decision.status, decision.result, turn.result?.usage ?? null, kept);
+  // A failed preview queues its flake and production runs in the same statement as its end state.
+  const followUps = decision.status === "failed" ? followUpsFor(mission, run) : [];
+  const won = await recordEnd(mission.id, decision.status, decision.result, turn.result?.usage ?? null, kept, followUps);
   if (!won) return;
 
   if (decision.cancel) {
@@ -318,7 +413,7 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
   const steps = await collectStepShots(handle, mission.id).catch(() => []);
   const shotUrl = failShotUrl ?? steps.at(-1)?.url ?? null;
   if (shotUrl || steps.length > 0) {
-    const stepsJson = JSON.stringify({ steps });
+    const stepsJson = JSON.stringify({ step_shots: steps });
     await sql()`
       update missions
       set screenshot_url = coalesce(${shotUrl}, screenshot_url),
@@ -327,9 +422,6 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
     `;
   }
 
-  if (decision.status === "failed") {
-    await queueFollowUps(run, mission);
-  }
   await releaseParentIfFlakePassed(mission, decision.status);
 
   if (!kept) {
@@ -337,10 +429,18 @@ async function advanceMission(run: RunRow, mission: MissionRow): Promise<void> {
   }
 }
 
-/** Moves the run to reporting exactly once, runs the completion hook, then marks it done. */
+/**
+ * Moves the run to reporting exactly once, runs the completion hook, then marks it done. The
+ * update checks the missions again, so a stale read of them cannot complete a run whose
+ * follow-up missions were queued after that read.
+ */
 async function completeRun(runId: string): Promise<void> {
   const rows = await sql()`
-    update runs set status = 'reporting' where id = ${runId} and status = 'running' returning id
+    update runs set status = 'reporting'
+    where id = ${runId} and status = 'running'
+      and exists (select 1 from missions where run_id = ${runId})
+      and not exists (select 1 from missions where run_id = ${runId} and status in ('queued', 'running'))
+    returning id
   `;
   if (rows.length === 0) return;
   try {
@@ -348,18 +448,74 @@ async function completeRun(runId: string): Promise<void> {
     await sql()`update runs set status = 'done', finished_at = now() where id = ${runId} and status = 'reporting'`;
   } catch (err) {
     console.error(`[runner] completion hook failed for run ${runId}: ${(err as Error).message}`);
-    await sql()`update runs set status = 'failed', finished_at = now() where id = ${runId} and status = 'reporting'`;
+    await failRun(runId, runErrorText("Reporting failed", err), "reporting");
   }
 }
 
 /**
- * One slice of progress for a run: poll every running mission for at most one second, record end
- * states, queue flake and production runs for failures, start queued missions in free slots, and
- * finish the run when nothing is left. Returns the run, its missions and its findings.
+ * Stops the kept Computers of an ended run that no Bug finding names, and sets kept = false.
+ * lib/run-hooks.ts calls it after buildFindings and postReview. Without it, computersInUse counts
+ * each kept Computer for 24 hours and later runs get no free slots. A mission that ended in the last
+ * RELEASE_GRACE_MS waits first, so a status call can finish reading its step pictures.
+ * Returns how many it released. It logs a failure and never throws, so a release error cannot fail the run.
  */
-export async function advanceRun(runId: string): Promise<RunSnapshot | null> {
+export async function releaseUnneededKept(
+  runId: string,
+  findings: Array<Pick<FindingRow, "level" | "mission_ids">>,
+): Promise<number> {
+  let missions: MissionRow[];
+  try {
+    missions = keptToRelease(await loadMissions(runId), findings);
+  } catch (err) {
+    console.warn(`[runner] could not read the kept missions of run ${runId}: ${(err as Error).message}`);
+    return 0;
+  }
+  const results = await Promise.allSettled(
+    missions.map(async (mission) => {
+      const wait = releaseDelayMs(mission.finished_at, Date.now());
+      if (wait > 0) await sleep(wait);
+      const handle = await loadHandle(mission.id);
+      if (handle) {
+        await release(handle, mission.id);
+      } else {
+        await sql()`update missions set kept = false where id = ${mission.id}`;
+      }
+    }),
+  );
+  let released = 0;
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      released += 1;
+    } else {
+      console.warn(`[runner] could not release mission ${missions[i]!.id}: ${(r.reason as Error)?.message ?? r.reason}`);
+    }
+  });
+  return released;
+}
+
+export interface AdvanceOptions {
+  /**
+   * Start queued missions in free slots in this call. Default true. The status route passes false
+   * and calls startQueued in after(), so the poll answers without waiting on Computer starts.
+   */
+  fillSlots?: boolean;
+}
+
+/**
+ * One slice of progress for a run: poll every running mission for at most one second, record end
+ * states with the flake and production runs of failures, start queued missions in free slots, and
+ * finish the run when nothing is left. Returns the run, its missions and its findings.
+ * A run in `planning` only gets the timeout check: after 6 minutes it moves to failed.
+ */
+export async function advanceRun(runId: string, options: AdvanceOptions = {}): Promise<RunSnapshot | null> {
   const run = await loadRun(runId);
   if (!run) return null;
+  if (run.status === "planning") {
+    if (planningTimedOut(run, Date.now())) {
+      await failRun(runId, PLANNING_TIMEOUT_ERROR, "planning");
+    }
+    return snapshot(runId);
+  }
   if (run.status !== "running") return snapshot(runId);
 
   const missions = await loadMissions(runId);
@@ -369,9 +525,12 @@ export async function advanceRun(runId: string): Promise<RunSnapshot | null> {
     if (r.status === "rejected") console.warn(`[runner] advanceMission failed: ${(r.reason as Error)?.message ?? r.reason}`);
   }
 
-  await fillSlots(run);
-
-  const after = await loadMissions(runId);
+  let after = await loadMissions(runId);
+  // Only with queued missions: fillSlots takes the start lease, which costs two writes.
+  if (options.fillSlots !== false && needsStarts(run, after)) {
+    await fillSlots(run);
+    after = await loadMissions(runId);
+  }
   if (runIsComplete(after)) {
     await completeRun(runId);
   }
