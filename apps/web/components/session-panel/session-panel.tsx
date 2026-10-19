@@ -226,8 +226,9 @@ export function SessionPanel({
   const live = screen.kind === "live" && phase === "live";
   // A short drop keeps the control bar. The server keeps the control through a reconnect.
   const reconnecting = screen.kind === "live" && phase === "reconnecting";
-  // The desktop is really gone: the Computer stopped, or the panel no longer shows it.
-  const desktopGone = screen.kind !== "live" || phase === "gone";
+  // The desktop is really gone: the Computer stopped, or the panel no longer shows it. "stalled"
+  // counts too: after a live screen the panel can end there, and then nobody can drive the desktop.
+  const desktopGone = screen.kind !== "live" || phase === "gone" || phase === "stalled";
 
   // Nobody can drive a desktop that is gone. Give the control back to the agent on the server
   // too, else the agent stays paused.

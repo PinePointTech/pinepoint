@@ -79,6 +79,8 @@ export default function LiveDesktop({ missionId, control, running, poster, onInp
   }, [running, onPhase, onLastFrame]);
 
   const wasLive = useRef(false);
+  // True once the screen was live in this panel, also after a reconnect reset: it picks the wording.
+  const everLive = useRef(false);
   const phaseNow = useRef(phase);
   const frame = useRef<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -269,7 +271,10 @@ export default function LiveDesktop({ missionId, control, running, poster, onInp
   // service can still be starting: ask for a new delegation in 3 seconds, until the 45 seconds are over.
   const handleExhausted = useCallback(() => {
     if (wasLive.current) {
+      // Show the newest frame under the loading overlay while the panel asks again.
+      if (frame.current) lastFrameRef.current(frame.current);
       wasLive.current = false;
+      everLive.current = true;
       tryStart.current = Date.now();
       connectStart.current = null;
       setAttempt((n) => n + 1);
@@ -285,7 +290,9 @@ export default function LiveDesktop({ missionId, control, running, poster, onInp
 
   const stage =
     phase === "waiting"
-      ? "Waiting for the computer"
+      ? everLive.current
+        ? "Reconnecting to the screen"
+        : "Waiting for the computer"
       : phase === "reconnecting"
         ? reconnect > 0
           ? `Reconnecting, attempt ${reconnect} of ${RECONNECTS}`
@@ -328,7 +335,13 @@ export default function LiveDesktop({ missionId, control, running, poster, onInp
           since={since}
           poster={poster}
           busy={phase !== "stalled" && phase !== "gone"}
-          detail={phase === "waiting" ? "The computer is still starting. This can take a minute." : null}
+          detail={
+            phase === "waiting"
+              ? everLive.current
+                ? "The connection dropped. PinePoint asks for the screen again."
+                : "The computer is still starting. This can take a minute."
+              : null
+          }
           action={
             phase === "stalled" ? (
               <button
