@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { MissionRow } from "@pinepoint/core";
-import { groupFindings, readMissionResult } from "./findings";
+import { groupFindings, readMissionResult, withShotFallback } from "./findings";
 
 // Pure grouping tests on fixture rows. No network, no database.
 
@@ -224,4 +224,26 @@ test("a passing mission without notes gives nothing, and flake or production row
   assert.deepEqual(groupFindings([flake, production]), []);
   void preview;
   assert.deepEqual(groupFindings([mission({ checksResult: [passCoupon] })]), []);
+});
+
+test("withShotFallback fills a missing screenshot_url from the stored pictures and keeps a written one", () => {
+  const { preview, flake, production, missions } = plantedRun();
+  const bare = { ...preview, screenshot_url: null };
+  const list = missions.map((m) => (m.id === preview.id ? bare : m));
+  const shots = new Map([
+    [preview.id, "/api/shots/11111111-1111-4111-8111-111111111111"],
+    [flake.id, "/api/shots/22222222-2222-4222-8222-222222222222"],
+  ]);
+
+  const filled = withShotFallback(list, shots);
+  assert.equal(filled.find((m) => m.id === preview.id)!.screenshot_url, "/api/shots/11111111-1111-4111-8111-111111111111");
+  assert.equal(filled.find((m) => m.id === production.id)!.screenshot_url, null, "no stored picture, no change");
+  assert.equal(bare.screenshot_url, null, "the input rows do not change");
+
+  const findings = groupFindings(filled);
+  assert.equal(findings[0]!.screenshotUrl, "/api/shots/11111111-1111-4111-8111-111111111111");
+
+  const written = withShotFallback(missions, new Map([[preview.id, "/api/shots/other"]]));
+  assert.equal(written.find((m) => m.id === preview.id)!.screenshot_url, "https://blob.example/fail.png");
+  assert.equal(withShotFallback(missions, new Map()), missions);
 });

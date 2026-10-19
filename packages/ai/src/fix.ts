@@ -9,10 +9,10 @@
 // GitHub, calls `proposeFix` and writes findings.fix.
 
 import { z } from "zod";
-import { sql, type FindingRow, type MissionRow } from "@pinepoint/core";
+import { loadShot, shotIdFromPath, sql, type FindingRow, type MissionRow, type StoredShot } from "@pinepoint/core";
 import { octokit, type PrRef } from "@pinepoint/github";
 import { getPrDiff, readFilesWithinBudget, type RepoFile } from "@pinepoint/github/context";
-import { completeWithAnthropic, fixModel, type Complete, type TokenUsage } from "./client";
+import { completeWithAnthropic, fixModel, imageBlock, type Complete, type CompleteImage, type TokenUsage } from "./client";
 import { annotateDiff, changedPaths, isInsideHunk, rightSideHunkLines } from "./diff";
 import { readMissionResult } from "./findings";
 import { extractJson } from "./planner";
@@ -78,8 +78,13 @@ export interface FixInput {
   saw: string | null;
   /** The errors the missions reported, as text. */
   errors: string[];
-  /** The failure screenshot. Sent as an image when set. */
+  /** The failure screenshot: findings.screenshot_url, an absolute URL or a /api/shots/<id> path. */
   screenshotUrl: string | null;
+  /**
+   * The screenshot as the model gets it (loadScreenshotImage). fixFinding sets it. When it is not
+   * set, an absolute http(s) screenshotUrl goes as a URL and a relative path goes nowhere.
+   */
+  screenshot?: CompleteImage | null;
   /** The files the diff touches, at the head SHA. 200 KB at most in total. */
   files: RepoFile[];
 }
@@ -142,6 +147,38 @@ export const FIX_OUTPUT_EXAMPLE: Fix = {
   confidence: "high",
 };
 
+/** The images that go to the model with the prompt: the failure screenshot, or none. */
+export function fixImages(input: Pick<FixInput, "screenshotUrl" | "screenshot">): CompleteImage[] {
+  const image = input.screenshot !== undefined ? input.screenshot : absoluteUrlImage(input.screenshotUrl);
+  return image && imageBlock(image) ? [image] : [];
+}
+
+function absoluteUrlImage(url: string | null): CompleteImage | null {
+  return url && /^https?:\/\//i.test(url) ? { url } : null;
+}
+
+/**
+ * The failure screenshot as the model gets it. An absolute http(s) URL goes as it is. A
+ * /api/shots/<id> path is read from mission_shots and goes as base64: Anthropic cannot fetch a
+ * relative path. null when there is no picture or it cannot be read. `load` is for the tests.
+ */
+export async function loadScreenshotImage(
+  url: string | null,
+  load: (id: string) => Promise<StoredShot | null> = loadShot,
+): Promise<CompleteImage | null> {
+  const absolute = absoluteUrlImage(url);
+  if (absolute) return absolute;
+  const id = shotIdFromPath(url);
+  if (!id) return null;
+  try {
+    const shot = await load(id);
+    return shot ? { mediaType: shot.mediaType, data: shot.data.toString("base64") } : null;
+  } catch (err) {
+    console.warn(`[fix] could not load screenshot ${id}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 /** Builds the user prompt. Exported for the tests and for prompt reviews. */
 export function buildFixPrompt(input: FixInput): string {
   const files = input.files
@@ -170,7 +207,9 @@ export function buildFixPrompt(input: FixInput): string {
     ...input.steps.map((step, i) => `${i + 1}. ${step}`),
     `Expected: ${input.expected ?? "(none)"}`,
     `Saw: ${input.saw ?? "(none)"}`,
-    input.screenshotUrl ? "The image is the failure screenshot. It shows the screen at the moment the check failed." : "No failure screenshot.",
+    fixImages(input).length > 0
+      ? "The image is the failure screenshot. It shows the screen at the moment the check failed."
+      : "No failure screenshot.",
     "",
     "## Errors the simulated user saw",
     errors.length > 0 ? errors.map((e) => `- ${e}`).join("\n") : "(none)",
@@ -255,7 +294,7 @@ export async function proposeFix(input: FixInput, options: ProposeFixOptions = {
   const model = options.model ?? fixModel();
   const complete = options.complete ?? completeWithAnthropic;
   const prompt = buildFixPrompt(input);
-  const images = input.screenshotUrl ? [{ url: input.screenshotUrl }] : [];
+  const images = fixImages(input);
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
   let lastError = "";
@@ -376,7 +415,11 @@ export async function fixFinding(findingId: string, options: FixFindingOptions =
 
   const ref: PrRef = { owner: finding.owner, repo: finding.repo, number: finding.pr_number };
   const gh = octokit();
-  const [diff, errors] = await Promise.all([getPrDiff(gh, ref), loadMissionErrors(finding.mission_ids ?? [])]);
+  const [diff, errors, screenshot] = await Promise.all([
+    getPrDiff(gh, ref),
+    loadMissionErrors(finding.mission_ids ?? []),
+    loadScreenshotImage(finding.screenshot_url),
+  ]);
   const files = await readFilesWithinBudget(gh, ref, changedPaths(diff), finding.head_sha);
 
   const result = await proposeFix(
@@ -388,6 +431,7 @@ export async function fixFinding(findingId: string, options: FixFindingOptions =
       saw: finding.saw,
       errors,
       screenshotUrl: finding.screenshot_url,
+      screenshot,
       files,
     },
     options,

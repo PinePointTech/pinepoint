@@ -15,6 +15,7 @@
 
 import {
   MissionResultSchema,
+  latestShotPaths,
   sql,
   type CheckResult,
   type FindingRow,
@@ -224,6 +225,30 @@ async function loadFindings(runId: string): Promise<FindingRow[]> {
   return (await sql()`select * from findings where run_id = ${runId} order by id`) as FindingRow[];
 }
 
+/**
+ * Missions with screenshot_url set from `shots` (mission id to picture path) where it is null. Pure.
+ * The status call that ends a mission writes screenshot_url after it saves the pictures, and another
+ * call can build the findings before that write.
+ */
+export function withShotFallback(missions: MissionRow[], shots: ReadonlyMap<string, string>): MissionRow[] {
+  if (shots.size === 0) return missions;
+  return missions.map((m) => {
+    const shot = shots.get(m.id);
+    return m.screenshot_url || !shot ? m : { ...m, screenshot_url: shot };
+  });
+}
+
+/** The stored picture of each preview mission with no screenshot_url yet. An empty map on an error: the findings do not wait on a picture. */
+async function fallbackShots(missions: MissionRow[]): Promise<Map<string, string>> {
+  const ids = missions.filter((m) => m.kind === "preview" && !m.screenshot_url).map((m) => m.id);
+  try {
+    return await latestShotPaths(ids);
+  } catch (err) {
+    console.warn(`[findings] could not read the stored pictures: ${(err as Error).message}`);
+    return new Map();
+  }
+}
+
 async function insertFinding(runId: string, built: BuiltFinding): Promise<FindingRow> {
   const { draft, text } = built;
   const rows = (await sql().query(
@@ -271,7 +296,7 @@ export async function buildFindings(runId: string, options: BuildFindingsOptions
     }
   }
 
-  const drafts = groupFindings(missions);
+  const drafts = groupFindings(withShotFallback(missions, await fallbackShots(missions)));
   const rewritten: BuiltFinding[] = await Promise.all(
     drafts.map(async (draft) => {
       // qa.md goes only with a notes-only draft, where the model judges whether the note is a problem.

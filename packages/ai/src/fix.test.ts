@@ -2,11 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Complete } from "./client";
+import { imageBlock, type Complete } from "./client";
 import {
   FIX_RULES,
   FixError,
   buildFixPrompt,
+  fixImages,
+  loadScreenshotImage,
   parseFixReply,
   proposeFix,
   readStoredFix,
@@ -159,6 +161,69 @@ test("proposeFix keeps the null form with its reason", async () => {
   const result = await proposeFix(input, { model: "m", complete });
   assert.equal(result.stored.fix, null);
   assert.equal(result.stored.reason, "The bug is in a file the diff does not touch.");
+});
+
+const SHOT_ID = "3c2b1a09-8f7e-4d6c-9b5a-1f2e3d4c5b6a";
+const SHOT_PATH = `/api/shots/${SHOT_ID}`;
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+
+test("fixImages: an absolute URL goes as a URL, a relative path without loaded bytes goes nowhere", () => {
+  assert.deepEqual(fixImages({ screenshotUrl: "https://blob.example.com/fail.png" }), [{ url: "https://blob.example.com/fail.png" }]);
+  assert.deepEqual(fixImages({ screenshotUrl: SHOT_PATH }), []);
+  assert.deepEqual(fixImages({ screenshotUrl: null }), []);
+});
+
+test("fixImages: the loaded screenshot wins, and null means no image", () => {
+  const image = { mediaType: "image/png", data: PNG_BYTES.toString("base64") };
+  assert.deepEqual(fixImages({ screenshotUrl: SHOT_PATH, screenshot: image }), [image]);
+  assert.deepEqual(fixImages({ screenshotUrl: "https://blob.example.com/fail.png", screenshot: null }), []);
+  assert.deepEqual(fixImages({ screenshotUrl: SHOT_PATH, screenshot: { mediaType: "image/avif", data: "AAAA" } }), [], "a type the API does not read");
+});
+
+test("loadScreenshotImage reads a /api/shots path as base64 and keeps an absolute URL", async () => {
+  const asked: string[] = [];
+  const load = async (id: string) => {
+    asked.push(id);
+    return id === SHOT_ID ? { mediaType: "image/webp", data: PNG_BYTES } : null;
+  };
+  assert.deepEqual(await loadScreenshotImage(SHOT_PATH, load), { mediaType: "image/webp", data: PNG_BYTES.toString("base64") });
+  assert.deepEqual(await loadScreenshotImage("https://app.example/api/shots/x", load), { url: "https://app.example/api/shots/x" });
+  assert.equal(await loadScreenshotImage(`/api/shots/${SHOT_ID.replace("3c", "4d")}`, load), null, "unknown id");
+  assert.equal(await loadScreenshotImage("/fail.png", load), null, "not a shot path");
+  assert.equal(await loadScreenshotImage(null, load), null);
+  assert.deepEqual(asked, [SHOT_ID, SHOT_ID.replace("3c", "4d")]);
+});
+
+test("loadScreenshotImage gives null when the picture cannot be read", async () => {
+  const load = async () => {
+    throw new Error("connection reset");
+  };
+  assert.equal(await loadScreenshotImage(SHOT_PATH, load), null);
+});
+
+test("proposeFix sends a stored picture as a base64 image and says so in the prompt", async () => {
+  const { complete, calls } = fakeComplete([JSON.stringify(goodFix)]);
+  const screenshot = { mediaType: "image/png", data: PNG_BYTES.toString("base64") };
+  await proposeFix({ ...input, screenshotUrl: SHOT_PATH, screenshot }, { model: "m", complete });
+  assert.deepEqual(calls[0]!.images, [screenshot]);
+  assert.ok(calls[0]!.prompt.includes("The image is the failure screenshot."));
+
+  const none = fakeComplete([JSON.stringify(goodFix)]);
+  await proposeFix({ ...input, screenshotUrl: SHOT_PATH }, { model: "m", complete: none.complete });
+  assert.deepEqual(none.calls[0]!.images, []);
+  assert.ok(none.calls[0]!.prompt.includes("No failure screenshot."));
+});
+
+test("imageBlock builds a URL source or a base64 source, and drops a type the API does not read", () => {
+  assert.deepEqual(imageBlock({ url: "https://blob.example.com/fail.png" }), {
+    type: "image",
+    source: { type: "url", url: "https://blob.example.com/fail.png" },
+  });
+  assert.deepEqual(imageBlock({ mediaType: "IMAGE/WEBP", data: "AAAA" }), {
+    type: "image",
+    source: { type: "base64", media_type: "image/webp", data: "AAAA" },
+  });
+  assert.equal(imageBlock({ mediaType: "image/avif", data: "AAAA" }), null);
 });
 
 test("readStoredFix reads findings.fix back and rejects other values", () => {

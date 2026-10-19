@@ -1,6 +1,16 @@
 // @pinepoint/ai: Anthropic calls for the planner, the STE rewrite, the STE lint and the fix.
 
-export { anthropic, anthropicApiKey, plannerModel, fixModel, type Complete, type TokenUsage } from "./client";
+export {
+  anthropic,
+  anthropicApiKey,
+  plannerModel,
+  fixModel,
+  imageBlock,
+  BASE64_IMAGE_TYPES,
+  type Complete,
+  type CompleteImage,
+  type TokenUsage,
+} from "./client";
 export {
   rightSideLines,
   rightSideHunkLines,
@@ -41,6 +51,7 @@ export {
 export {
   buildFindings,
   groupFindings,
+  withShotFallback,
   loadRunMissions,
   readMissionResult,
   lintFinding,
@@ -54,6 +65,8 @@ export {
   proposeFix,
   fixFinding,
   buildFixPrompt,
+  fixImages,
+  loadScreenshotImage,
   parseFixReply,
   validateFix,
   readStoredFix,
