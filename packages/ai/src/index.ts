@@ -67,6 +67,7 @@ export {
   buildFixPrompt,
   fixImages,
   loadScreenshotImage,
+  MAX_IMAGE_BASE64_CHARS,
   parseFixReply,
   validateFix,
   readStoredFix,

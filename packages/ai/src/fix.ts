@@ -158,9 +158,17 @@ function absoluteUrlImage(url: string | null): CompleteImage | null {
 }
 
 /**
+ * The Messages API refuses a base64 image over 5 MB, and that error fails the whole fix request.
+ * The limit here is on the base64 text, which is 4/3 of the picture's bytes (about 3.75 MB), so
+ * the request stays under the limit however the API measures it.
+ */
+export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024;
+
+/**
  * The failure screenshot as the model gets it. An absolute http(s) URL goes as it is. A
  * /api/shots/<id> path is read from mission_shots and goes as base64: Anthropic cannot fetch a
- * relative path. null when there is no picture or it cannot be read. `load` is for the tests.
+ * relative path. null when there is no picture, it cannot be read, or it is over
+ * MAX_IMAGE_BASE64_CHARS: the fix then runs without the picture. `load` is for the tests.
  */
 export async function loadScreenshotImage(
   url: string | null,
@@ -170,13 +178,23 @@ export async function loadScreenshotImage(
   if (absolute) return absolute;
   const id = shotIdFromPath(url);
   if (!id) return null;
+  let shot: StoredShot | null;
   try {
-    const shot = await load(id);
-    return shot ? { mediaType: shot.mediaType, data: shot.data.toString("base64") } : null;
+    shot = await load(id);
   } catch (err) {
     console.warn(`[fix] could not load screenshot ${id}: ${(err as Error).message}`);
     return null;
   }
+  if (!shot) return null;
+  // Compute the base64 length first, so a large picture is not encoded only to be dropped.
+  const base64Chars = Math.ceil(shot.data.byteLength / 3) * 4;
+  if (base64Chars > MAX_IMAGE_BASE64_CHARS) {
+    console.warn(
+      `[fix] screenshot ${id} is ${shot.data.byteLength} bytes, over the image limit. The fix runs without it.`,
+    );
+    return null;
+  }
+  return { mediaType: shot.mediaType, data: shot.data.toString("base64") };
 }
 
 /** Builds the user prompt. Exported for the tests and for prompt reviews. */

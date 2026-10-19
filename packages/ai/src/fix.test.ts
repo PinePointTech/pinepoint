@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { imageBlock, type Complete } from "./client";
 import {
   FIX_RULES,
+  MAX_IMAGE_BASE64_CHARS,
   FixError,
   buildFixPrompt,
   fixImages,
@@ -192,6 +193,17 @@ test("loadScreenshotImage reads a /api/shots path as base64 and keeps an absolut
   assert.equal(await loadScreenshotImage("/fail.png", load), null, "not a shot path");
   assert.equal(await loadScreenshotImage(null, load), null);
   assert.deepEqual(asked, [SHOT_ID, SHOT_ID.replace("3c", "4d")]);
+});
+
+test("loadScreenshotImage drops a picture over the image limit and keeps one at the limit", async () => {
+  // 3 bytes become 4 base64 characters.
+  const atLimit = Buffer.alloc((MAX_IMAGE_BASE64_CHARS / 4) * 3);
+  const overLimit = Buffer.alloc(atLimit.byteLength + 1);
+  const image = await loadScreenshotImage(SHOT_PATH, async () => ({ mediaType: "image/png", data: atLimit }));
+  assert.equal(image && "data" in image ? image.data.length : 0, MAX_IMAGE_BASE64_CHARS);
+  assert.equal(await loadScreenshotImage(SHOT_PATH, async () => ({ mediaType: "image/png", data: overLimit })), null);
+  const big = Buffer.alloc(6 * 1024 * 1024);
+  assert.equal(await loadScreenshotImage(SHOT_PATH, async () => ({ mediaType: "image/png", data: big })), null);
 });
 
 test("loadScreenshotImage gives null when the picture cannot be read", async () => {
