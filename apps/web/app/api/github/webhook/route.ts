@@ -3,7 +3,9 @@
 // Events: pull_request (opened, reopened, synchronize, ready_for_review) and deployment_status
 // (success, not Production). The Vercel preview is usually not ready at pull_request time, so
 // deployment_status is the main trigger. The checks below run before the response, which must go
-// out within GitHub's 10 seconds. Planning and driving the run happen in after().
+// out within GitHub's 10 seconds. In after(): prepareRun reads the PR and saves the run with status
+// `planning`, then planAndDrive plans, starts and drives it (lib/start-run.ts, the same steps as
+// POST /api/runs).
 //
 //   401  no GITHUB_WEBHOOK_SECRET, or a bad X-Hub-Signature-256
 //   200  ping, or skipped with a reason (other paths, a run exists, not the PR head, ...)
@@ -21,13 +23,14 @@ import {
   verifySignature,
   webhookPaths,
 } from "@pinepoint/github/webhook";
-import { DRIVE_SLICE_MS, driveRun } from "@/lib/drive";
-import { startRunForPr } from "@/lib/start-run";
-import { activeRunFor, attachRun, claim, releaseClaim, type ClaimTarget } from "@/lib/webhook-claims";
+import { activeRunFor } from "@pinepoint/runner";
+import { DRIVE_SLICE_MS } from "@/lib/drive";
+import { planAndDrive, prepareRun, type PlanningRun } from "@/lib/start-run";
+import { attachRun, claim, releaseClaim, type ClaimTarget } from "@/lib/webhook-claims";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-/** The planner, the first Computer starts and the first drive slice run in after(). */
+/** The PR read, the planner, the first Computer starts and the first drive slice run in after(). */
 export const maxDuration = 300;
 
 type Skip = { skip: string };
@@ -79,31 +82,36 @@ async function fromDeploymentStatus(p: DeploymentStatusPayload, gh: Octokit): Pr
   return { ...ref, number: pr.number, headSha: pr.headSha };
 }
 
-/** Plans the run, saves it, starts the first Computers, then drives it. Runs in after(). */
+/** Saves the run (status planning), then plans, starts and drives it. Runs in after(). */
 async function startAndDrive(target: ClaimTarget, sliceEndsAt: number): Promise<void> {
   const label = `${target.owner}/${target.repo}#${target.number}@${target.headSha.slice(0, 7)}`;
-  let runId: string;
+  let run: PlanningRun;
   try {
-    const outcome = await startRunForPr({
+    const outcome = await prepareRun({
       prUrl: prUrl(target),
       noPreview: "skip",
       expectHeadSha: target.headSha,
+      // The claim already lets only one delivery start a run for this head.
+      force: true,
     });
-    if (outcome.status !== "running") {
+    if (outcome.status !== "planning") {
       console.log(`[webhook] ${label}: no run (${outcome.status})`);
       await releaseClaim(target);
       return;
     }
-    runId = outcome.runId;
-    await attachRun(target, runId);
-    console.log(`[webhook] ${label}: run ${runId} with ${outcome.missions} missions, ${outcome.started} started`);
+    run = outcome.run;
   } catch (err) {
     console.error(`[webhook] ${label}: could not start a run: ${(err as Error).message}`);
     await releaseClaim(target).catch((e: Error) => console.error(`[webhook] release failed: ${e.message}`));
     return;
   }
-  const end = await driveRun(runId, sliceEndsAt);
-  console.log(`[webhook] ${label}: first drive slice for run ${runId} ended: ${end}`);
+  // The run exists from here on. A failed attach only leaves the claim without its run id; the
+  // claim check also looks at the runs table, so no second run starts.
+  await attachRun(target, run.runId).catch((e: Error) =>
+    console.error(`[webhook] ${label}: could not attach run ${run.runId} to the claim: ${e.message}`),
+  );
+  console.log(`[webhook] ${label}: run ${run.runId} is planning`);
+  await planAndDrive(run, sliceEndsAt, "webhook");
 }
 
 export async function POST(request: Request) {

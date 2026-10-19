@@ -16,6 +16,7 @@ import {
   type Session,
 } from "@pinesandbox/computer";
 import { loadHandle, type PineHandle } from "@pinepoint/core";
+import { isComputerGone } from "@pinepoint/runner/pine";
 
 /** The delegation envelope that `connectionFromDelegation` in @pinesandbox/computer-web reads. */
 export type DesktopDelegation = ReturnType<
@@ -81,18 +82,51 @@ function missionSession({ handle, computer }: MissionComputer): Session {
   return computer.adoptSession(handle.sessionName, handle.sessionToken);
 }
 
+/** Lifecycle states of a Computer that never runs again. */
+const STOPPED_STATES: ReadonlySet<string> = new Set(["terminated", "failed"]);
+/** How long the check after a failed call waits for the Computer's state. */
+const STATUS_TIMEOUT_MS = 5_000;
+
+function computerStopped(): DesktopRouteError {
+  return new DesktopRouteError(410, "computer_stopped", "The Computer for this mission is stopped.");
+}
+
+/**
+ * After a failed call: the 410 computer_stopped error when Pine confirms that the Computer is
+ * stopped or deleted, else the error itself. A stopped Computer can fail a call with a transport
+ * or session error first, so the lifecycle state decides.
+ */
+async function stoppedOr(computer: Computer, err: unknown): Promise<unknown> {
+  if (err instanceof DesktopRouteError || isComputerGone(err)) return err;
+  try {
+    const state = await computer.status({ signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
+    return STOPPED_STATES.has(state) ? computerStopped() : err;
+  } catch (statusErr) {
+    return isComputerGone(statusErr) ? computerStopped() : err;
+  }
+}
+
 /**
  * Resumes the Computer when it is paused. Pause is not enabled for the Pine project
  * (VI-7 spike), so a failed status read or resume is logged and the call continues.
+ * A stopped or deleted Computer throws the 410 computer_stopped error.
  */
 async function resumeIfPaused(missionId: string, computer: Computer): Promise<void> {
+  let state: string;
   try {
-    const state = await computer.status();
-    if (state === "paused" || state === "pausing" || state === "resuming") {
-      await computer.resume();
-    }
+    state = await computer.status();
   } catch (err) {
-    logPineError("resume", missionId, err);
+    if (isComputerGone(err)) throw computerStopped();
+    logPineError("status", missionId, err);
+    return;
+  }
+  if (STOPPED_STATES.has(state)) throw computerStopped();
+  if (state === "paused" || state === "pausing" || state === "resuming") {
+    try {
+      await computer.resume();
+    } catch (err) {
+      logPineError("resume", missionId, err);
+    }
   }
 }
 
@@ -103,17 +137,25 @@ async function resumeIfPaused(missionId: string, computer: Computer): Promise<vo
 export async function delegateDesktop(missionId: string): Promise<DesktopDelegation> {
   const mc = await missionComputer(missionId);
   await resumeIfPaused(missionId, mc.computer);
-  const connection = await mc.computer.delegateDesktop(mc.handle.sessionName, {
-    create: false,
-  });
-  return connection.toJSON();
+  try {
+    const connection = await mc.computer.delegateDesktop(mc.handle.sessionName, {
+      create: false,
+    });
+    return connection.toJSON();
+  } catch (err) {
+    throw await stoppedOr(mc.computer, err);
+  }
 }
 
 /** Mints a fresh desktop token for the mission's session. The token lasts 120 seconds. */
 export async function mintDesktopToken(missionId: string): Promise<DesktopTokenResponse> {
-  const session = missionSession(await missionComputer(missionId));
-  const { token, expiresAt } = await session.desktopToken();
-  return { token, expiresAt };
+  const mc = await missionComputer(missionId);
+  try {
+    const { token, expiresAt } = await missionSession(mc).desktopToken();
+    return { token, expiresAt };
+  } catch (err) {
+    throw await stoppedOr(mc.computer, err);
+  }
 }
 
 /** Gives the session to the person ("take") or back to Pine's agent ("release"). */
@@ -122,15 +164,19 @@ export async function setControl(
   action: ControlAction,
 ): Promise<ControlResponse> {
   const { handle, computer } = await missionComputer(missionId);
-  const state =
-    action === "take"
-      ? await computer.takeControl(handle.sessionName)
-      : await computer.releaseControl(handle.sessionName);
-  return {
-    controller: state.controller,
-    epoch: state.epoch,
-    sessionName: state.sessionName,
-  };
+  try {
+    const state =
+      action === "take"
+        ? await computer.takeControl(handle.sessionName)
+        : await computer.releaseControl(handle.sessionName);
+    return {
+      controller: state.controller,
+      epoch: state.epoch,
+      sessionName: state.sessionName,
+    };
+  } catch (err) {
+    throw await stoppedOr(computer, err);
+  }
 }
 
 export function parseControlAction(body: unknown): ControlAction {
@@ -188,6 +234,12 @@ export function errorResponse(step: string, missionId: string, err: unknown): Re
 
   logPineError(step, missionId, err);
 
+  // RuntimeGoneError, NotFoundError, TokenRejectedError or a lifecycle 404: the Computer was
+  // stopped (the run released it, or its idle timeout ended). The browser shows that, not an error.
+  if (isComputerGone(err)) {
+    const stopped = computerStopped();
+    return fail(stopped.status, stopped.code, stopped.message);
+  }
   if (err instanceof ApiError && err.is(ProblemType.sessionBusy)) {
     return fail(409, "session_busy", "The session is busy. Try again.");
   }

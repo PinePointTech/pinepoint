@@ -3,7 +3,8 @@
 // GitHub can send two deployment_status events for one commit at the same time. Planning takes
 // tens of seconds, so a check for an existing run is not enough on its own: both deliveries would
 // pass it. A claim row (db/003_webhook_claims.sql) is the gate. The insert either wins the key or
-// gets nothing back, in one statement, so only one delivery plans the run.
+// gets nothing back, in one statement, so only one delivery plans the run. The check for an
+// existing run (activeRunFor) lives in @pinepoint/runner, so POST /api/runs uses it too.
 
 import { sql } from "@pinepoint/core";
 
@@ -19,18 +20,6 @@ const STALE_CLAIM = "15 minutes";
 
 export function claimKey(t: ClaimTarget): string {
   return `${t.owner}/${t.repo}#${t.number}@${t.headSha}`;
-}
-
-/** A run for this PR head that is not failed and not no_preview, or null. */
-export async function activeRunFor(t: ClaimTarget): Promise<{ id: string; status: string } | null> {
-  const rows = (await sql()`
-    select id, status from runs
-    where owner = ${t.owner} and repo = ${t.repo} and pr_number = ${t.number} and head_sha = ${t.headSha}
-      and status not in ('failed', 'no_preview')
-    order by started_at desc nulls last
-    limit 1
-  `) as Array<{ id: string; status: string }>;
-  return rows[0] ?? null;
 }
 
 function missingTable(err: unknown): boolean {
