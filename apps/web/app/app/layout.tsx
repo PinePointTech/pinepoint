@@ -1,5 +1,5 @@
-import { MapPin } from "lucide-react";
 import Link from "next/link";
+import { PinePointMark } from "@/components/brand/PinePointMark";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -10,7 +10,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           href="/"
           className="flex items-center gap-1.5 text-lg font-extrabold tracking-tight text-fg"
         >
-          <MapPin className="size-5 text-accent" strokeWidth={2} aria-hidden />
+          <PinePointMark size={24} className="shrink-0 text-accent" />
           PinePoint
         </Link>
         <ThemeToggle />

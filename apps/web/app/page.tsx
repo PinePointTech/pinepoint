@@ -10,12 +10,12 @@ import {
   Code2,
   GitBranch,
   GitPullRequest,
-  MapPin,
   Monitor,
   MousePointer2,
   ScanEye,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { PinePointMark } from "@/components/brand/PinePointMark";
 import { EvidenceDemo } from "@/components/landing/EvidenceDemo";
 import { TesterDemo } from "@/components/landing/TesterDemo";
 import styles from "@/components/landing/LandingPage.module.css";
@@ -73,7 +73,7 @@ export default function Home() {
       <header className={`${styles.container} ${styles.header}`}>
         <Link href="/" className={styles.wordmark} aria-label="PinePoint home">
           <span className={styles.brandMark}>
-            <MapPin size={20} strokeWidth={1.8} aria-hidden />
+            <PinePointMark size={24} />
           </span>
           PinePoint
         </Link>
@@ -219,7 +219,7 @@ export default function Home() {
               <div className={styles.reviewBody}>
                 <div className={styles.reviewAuthor}>
                   <span className={styles.reviewAvatar}>
-                    <MapPin size={18} aria-hidden />
+                    <PinePointMark size={22} />
                   </span>
                   <span>
                     <strong>PinePoint</strong>
@@ -314,7 +314,7 @@ export default function Home() {
           aria-labelledby="cta-title"
         >
           <span className={styles.ctaMark}>
-            <MapPin size={25} strokeWidth={1.6} aria-hidden />
+            <PinePointMark size={30} />
           </span>
           <p className={styles.eyebrow}>Your next PR has company</p>
           <h2 id="cta-title">
@@ -338,7 +338,7 @@ export default function Home() {
       </main>
       <footer className={`${styles.container} ${styles.footer}`}>
         <Link href="/" className={styles.wordmark}>
-          <MapPin size={20} aria-hidden /> PinePoint
+          <PinePointMark size={22} /> PinePoint
         </Link>
         <p>Built on Pine Computers. Made for the next commit.</p>
         <a href={repository}>
