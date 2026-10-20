@@ -7,11 +7,24 @@ import {
   addItem,
   applyCoupon,
   emptyCart,
+  EXPRESS_SHIPPING_CENTS,
   formatPrice,
+  FREE_SHIPPING_FROM_CENTS,
   removeItem,
+  setShippingSpeed,
+  SHIPPING_CENTS,
   totals,
   type Cart,
+  type ShippingSpeed,
 } from "@/lib/cart";
+
+const shippingSpeeds: { id: ShippingSpeed; label: string }[] = [
+  {
+    id: "standard",
+    label: `Standard (${formatPrice(SHIPPING_CENTS)}, free from ${formatPrice(FREE_SHIPPING_FROM_CENTS)})`,
+  },
+  { id: "express", label: `Express (${formatPrice(EXPRESS_SHIPPING_CENTS)})` },
+];
 
 export function Store() {
   const router = useRouter();
@@ -102,6 +115,22 @@ export function Store() {
             <p className="muted">Applied: {cart.coupons.join(", ")}</p>
           )}
         </form>
+
+        <fieldset className="shipping">
+          <legend>Shipping speed</legend>
+          {shippingSpeeds.map((speed) => (
+            <label key={speed.id}>
+              <input
+                type="radio"
+                name="shipping"
+                value={speed.id}
+                checked={cart.shipping === speed.id}
+                onChange={() => setCart((c) => setShippingSpeed(c, speed.id))}
+              />
+              {speed.label}
+            </label>
+          ))}
+        </fieldset>
 
         <dl className="totals">
           <dt>Subtotal</dt>

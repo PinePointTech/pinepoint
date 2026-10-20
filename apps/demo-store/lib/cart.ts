@@ -1,11 +1,17 @@
 import { findProduct } from "./products";
 
 export type CartLine = { productId: string; quantity: number };
-export type Cart = { lines: CartLine[]; coupons: string[] };
+export type ShippingSpeed = "standard" | "express";
+export type Cart = {
+  lines: CartLine[];
+  coupons: string[];
+  shipping: ShippingSpeed;
+};
 
-export const emptyCart: Cart = { lines: [], coupons: [] };
+export const emptyCart: Cart = { lines: [], coupons: [], shipping: "standard" };
 
 export const SHIPPING_CENTS = 400;
+export const EXPRESS_SHIPPING_CENTS = 1200;
 export const FREE_SHIPPING_FROM_CENTS = 2000;
 
 // Percent off the subtotal, per code.
@@ -23,6 +29,10 @@ export function addItem(cart: Cart, productId: string): Cart {
 
 export function removeItem(cart: Cart, productId: string): Cart {
   return { ...cart, lines: cart.lines.filter((l) => l.productId !== productId) };
+}
+
+export function setShippingSpeed(cart: Cart, shipping: ShippingSpeed): Cart {
+  return { ...cart, shipping };
 }
 
 export function applyCoupon(
@@ -49,6 +59,13 @@ export type Totals = {
   totalCents: number;
 };
 
+function shippingFor(cart: Cart, subtotalCents: number): number {
+  if (subtotalCents === 0 || subtotalCents >= FREE_SHIPPING_FROM_CENTS) {
+    return 0;
+  }
+  return cart.shipping === "express" ? EXPRESS_SHIPPING_CENTS : SHIPPING_CENTS;
+}
+
 export function totals(cart: Cart): Totals {
   const subtotalCents = cart.lines.reduce(
     (sum, line) =>
@@ -64,10 +81,7 @@ export function totals(cart: Cart): Totals {
     }
   }
 
-  const shippingCents =
-    subtotalCents === 0 || subtotalCents >= FREE_SHIPPING_FROM_CENTS
-      ? 0
-      : SHIPPING_CENTS;
+  const shippingCents = shippingFor(cart, subtotalCents);
 
   return {
     subtotalCents,
