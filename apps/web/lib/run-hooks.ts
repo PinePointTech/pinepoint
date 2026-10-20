@@ -12,8 +12,10 @@
 import { after } from "next/server";
 import { buildFindings } from "@pinepoint/ai";
 import { pruneShots, type FindingRow } from "@pinepoint/core";
-import { releaseUnneededKept, setRunCompleteHook } from "@pinepoint/runner";
+import { loadRun, releaseUnneededKept, setRunAccessHook, setRunCompleteHook } from "@pinepoint/runner";
+import { resolveRepositoryAccess } from "@pinepoint/github/access";
 import { postReview } from "@pinepoint/github/review";
+import { githubForRun, recordAction } from "./access";
 
 /** Stops the kept Computers that no Bug needs. Logs and never throws. */
 async function releaseKept(runId: string, findings: FindingRow[]): Promise<void> {
@@ -45,6 +47,17 @@ function later(task: () => Promise<void>): void {
   }
 }
 
+// Before a private run's Computer starts, the initiator must still have write access to the
+// repository, asked of GitHub now (docs/github-access-contract.md section 5). The runner fails
+// the run on a denial and never starts the Computer. Legacy runs do not reach this hook.
+setRunAccessHook(async (run) => {
+  if (!run.repository_id || !run.initiated_by_user_id) return { ok: false, reason: "the run has no initiator" };
+  const access = await resolveRepositoryAccess(run.initiated_by_user_id, run.repository_id, { fresh: true });
+  if (access.canLaunch) return { ok: true };
+  void recordAction({ action: "access_lost", runId: run.id, userId: run.initiated_by_user_id, detail: { state: access.state, level: access.level } });
+  return { ok: false, reason: access.reason || `access is ${access.state}` };
+});
+
 setRunCompleteHook(async (runId) => {
   // VI-12 first: the review reads the findings rows.
   let findings: FindingRow[] | null = null;
@@ -54,7 +67,14 @@ setRunCompleteHook(async (runId) => {
     console.error(`[findings] could not build the findings for run ${runId}: ${(err as Error).message}`);
   }
   try {
-    const result = await postReview(runId);
+    // The review goes out under the initiator's token for a private run, the shared token for a
+    // legacy one. An initiator who must sign in again gets no review, and the run still completes.
+    const run = await loadRun(runId);
+    if (!run) throw new Error("the run is gone");
+    const result = await postReview(runId, { gh: await githubForRun(run) });
+    if (result.posted) {
+      void recordAction({ action: "review_post", runId, userId: run.initiated_by_user_id, detail: { reviewId: result.reviewId } });
+    }
     if (result.posted) {
       console.log(`[review] posted review ${result.reviewId} for run ${runId}`);
     } else {

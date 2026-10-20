@@ -9,7 +9,6 @@ import {
   GitPullRequest,
   History,
   MessageSquareText,
-  Play,
 } from "lucide-react";
 import { ApiError, createRun, getRunStatus, listRuns, type WithFake } from "@/lib/app-api";
 import {
@@ -22,8 +21,9 @@ import {
 import { SessionPanel, type FindingView, type StepShotView } from "@/components/session-panel";
 import { RunProgress, StartingRun } from "./activity";
 import { CostCard } from "./cost-card";
+import { LaunchPanel, type LaunchRequest } from "./launch-panel";
 import { MissionGroups } from "./mission-groups";
-import { Spinner, useNow } from "./progress";
+import { useNow } from "./progress";
 import {
   detailLine,
   failedChecks,
@@ -109,7 +109,25 @@ function minutesBetween(start: string | null, end: string | null): string | null
   return `${(ms / 60000).toFixed(1)} min`;
 }
 
-const PR_URL = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
+// What the sign-in and install callbacks say when they send a person back here (?auth_error=, ?install=).
+const AUTH_ERROR_TEXT: Record<string, string> = {
+  not_configured: "Sign-in is not set up on this deployment.",
+  access_denied: "You cancelled the GitHub sign-in.",
+  bad_state: "The sign-in did not come back the way it left. Try again.",
+  no_code: "GitHub sent no code. Try again.",
+  bad_code: "GitHub did not accept the sign-in. Try again.",
+  github_error: "GitHub did not answer. Try again in a minute.",
+};
+const INSTALL_TEXT: Record<string, { tone: "info" | "error"; text: string }> = {
+  connected: { tone: "info", text: "Connected. Pick the organization and a repository below." },
+  requested: { tone: "info", text: "Your request went to the organization owners. When they approve the installation, come back here and connect it." },
+  not_found: { tone: "error", text: "GitHub has no such installation." },
+  not_visible_to_user: { tone: "error", text: "That installation is not one you can see on GitHub, so PinePoint did not connect it." },
+  bad_request: { tone: "error", text: "GitHub sent no installation id." },
+  reauthorize: { tone: "error", text: "GitHub no longer accepts your sign-in. Continue with GitHub again." },
+  github_error: { tone: "error", text: "GitHub did not answer. Try again in a minute." },
+  not_configured: { tone: "error", text: "Connecting an organization is not set up on this deployment." },
+};
 
 // The click on Run, until the new run's first status arrives.
 interface Starting {
@@ -131,8 +149,6 @@ function startingStage(s: Starting, now: number): string {
 // The server's 500 text already starts with "Could not start the run". Do not say it two times.
 const startErrorText = (m: string) =>
   /^(could not|cannot) start the run/i.test(m) ? m : `Cannot start the run: ${m}`;
-
-const PR_URL_HINT = "Type a GitHub PR URL, for example https://github.com/owner/repo/pull/1.";
 
 function Chip({ label, value, tone }: { label: string; value: string | number; tone: string }) {
   return (
@@ -179,8 +195,9 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   // A note about the run start, or another failure of a click. The status poll does not clear it.
   const [notice, setNotice] = useState<{ tone: "info" | "error"; text: string } | null>(null);
-  const [prUrl, setPrUrl] = useState("");
   const [starting, setStarting] = useState<Starting | null>(null);
+  // Bumped when the server refused a launch because the PR head moved, so the preflight runs again.
+  const [preflightKey, setPreflightKey] = useState(0);
   const [missionId, setMissionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // A shared ?finding= link opens a finished run. Fake data skips the wait.
@@ -227,6 +244,16 @@ export function Dashboard() {
   }, [fakeParam]);
 
   useEffect(refreshRuns, [refreshRuns]);
+
+  // The sign-in and install callbacks come back with ?auth_error= or ?install=. Show it once and drop it from the URL.
+  const authError = params.get("auth_error");
+  const installResult = params.get("install");
+  useEffect(() => {
+    if (!authError && !installResult) return;
+    if (authError) setNotice({ tone: "error", text: AUTH_ERROR_TEXT[authError] ?? "The sign-in did not finish." });
+    else if (installResult) setNotice(INSTALL_TEXT[installResult] ?? { tone: "info", text: "Back from GitHub." });
+    setQuery({ auth_error: null, install: null, workspace: null });
+  }, [authError, installResult, setQuery]);
 
   // Bumped to poll the open run again after it ended, for example when the sample run restarts.
   const [pollKey, setPollKey] = useState(0);
@@ -276,17 +303,13 @@ export function Dashboard() {
   // Move the clocks (elapsed time, countdowns, the "minutes" chip) while something goes on.
   const now = useNow(!runEnded || starting !== null);
 
-  async function startRun(url: string) {
-    const match = PR_URL.exec(url);
-    if (!match) {
-      setNotice({ tone: "error", text: PR_URL_HINT });
-      return;
-    }
-    setStarting({ title: `${match[1]}/${match[2]} #${match[3]}`, at: Date.now(), runId: null, existing: false });
+  async function startRun(launch: LaunchRequest) {
+    if (starting) return;
+    setStarting({ title: launch.title, at: Date.now(), runId: null, existing: false });
     setError(null);
     setNotice(null);
     try {
-      const res = await createRun(url, { fake: fakeParam });
+      const res = await createRun(launch.request, { fake: fakeParam });
       // runId is the run in the URL when Run was clicked. The person cannot change it while
       // the form waits, but they can open a mission card of that run.
       const same = res.runId === runId;
@@ -308,6 +331,8 @@ export function Dashboard() {
     } catch (err) {
       const text = startErrorText((err as Error).message);
       setStarting(null);
+      // 409: the PR head moved since the preflight. The card looks again; the person clicks when ready.
+      if (err instanceof ApiError && err.status === 409) setPreflightKey((k) => k + 1);
       if (err instanceof ApiError && err.runId) {
         // The run row exists. Open it, so its status shows what happened.
         if (err.runId !== runId) {
@@ -321,11 +346,15 @@ export function Dashboard() {
     }
   }
 
-  function onRun(e: React.FormEvent) {
-    e.preventDefault();
-    if (starting) return;
-    startRun(prUrl.trim());
-  }
+  // Sign-in and install return to the page as it is, minus the callback's own parameters.
+  const returnTo = (() => {
+    const q = new URLSearchParams(params.toString());
+    q.delete("auth_error");
+    q.delete("install");
+    q.delete("workspace");
+    const s = q.toString();
+    return s ? `${pathname}?${s}` : pathname;
+  })();
 
   function openRun(id: string) {
     setMissionId(null);
@@ -426,30 +455,10 @@ export function Dashboard() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col gap-8">
-        <form onSubmit={onRun} className="flex flex-col gap-3 sm:flex-row">
-          <label htmlFor="pr-url" className="sr-only">
-            PR URL
-          </label>
-          {/* readOnly and aria-disabled, not disabled: a disabled control drops the focus to the body. */}
-          <input
-            id="pr-url"
-            type="url"
-            value={prUrl}
-            onChange={(e) => setPrUrl(e.target.value)}
-            readOnly={starting !== null}
-            aria-disabled={starting !== null}
-            placeholder="https://github.com/owner/repo/pull/1"
-            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-ring/30 aria-disabled:opacity-60"
-          />
-          <button
-            type="submit"
-            aria-disabled={starting !== null}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-fg transition-colors hover:bg-accent-hover aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-accent"
-          >
-            {starting ? <Spinner className="size-4" /> : <Play className="size-4" strokeWidth={2} aria-hidden />}
-            {starting ? "Starting" : "Run"}
-          </button>
-        </form>
+        <LaunchPanel busy={starting !== null} returnTo={returnTo} onLaunch={startRun} onNotice={setNotice} refreshKey={preflightKey} />
+        {fakeParam && (
+          <p className="-mt-4 text-xs text-muted">Sample data: Run shows the sample run, whatever is picked above.</p>
+        )}
 
         {error && (
           <p role="alert" className="rounded-2xl bg-danger-soft px-4 py-3 text-sm text-danger">
@@ -485,11 +494,11 @@ export function Dashboard() {
             <ol className="mt-4 space-y-3 text-muted">
               <li className="flex gap-3">
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">1</span>
-                Paste the URL of a GitHub PR that has a Vercel preview.
+                Pick a GitHub PR that has a Vercel preview: from your organization after you sign in, or by URL for the public demo.
               </li>
               <li className="flex gap-3">
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">2</span>
-                Click Run. Ten simulated users test the preview.
+                Click Run QA. Ten simulated users test the preview.
               </li>
               <li className="flex gap-3">
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">3</span>

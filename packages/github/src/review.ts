@@ -1,9 +1,8 @@
 // Posts one PR review for a run: a summary and one inline comment per Bug (plan sections 7 and 9.4).
 // The lock on runs.review_posted_at makes sure that the review posts only one time.
 
-// @pinepoint/github has no package dependency on @pinepoint/core, so import its db module by path.
-import { sql } from "../../core/src/db";
-import { octokit } from "./client";
+import type { Octokit } from "@octokit/rest";
+import { sql } from "@pinepoint/core";
 import { bugCommentBody, summaryBody, type ReviewFinding } from "./review-text";
 
 export type ReviewComment = { path: string; line: number; side: "RIGHT"; body: string };
@@ -103,10 +102,14 @@ export function buildReviewPayload(
   };
 }
 
-/** Loads the run, its missions and findings, and posts the review one time. */
+/**
+ * Loads the run, its missions and findings, and posts the review one time. `gh` is the client that
+ * posts: the initiator's for a private run, the shared token for a legacy one (contract section 4).
+ * It is required when the post is not a dry run, so no code path falls back to the shared token.
+ */
 export async function postReview(
   runId: string,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; gh?: Octokit } = {},
 ): Promise<PostReviewResult> {
   const db = sql();
   const [run] = (await db.query(
@@ -128,6 +131,8 @@ export async function postReview(
 
   const payload = buildReviewPayload(run, missions, findings, appBaseUrl());
   if (opts.dryRun) return { posted: false, payload };
+  const gh = opts.gh;
+  if (!gh) throw new Error(`postReview(${runId}) needs the GitHub client of the run's actor.`);
 
   const locked = await db.query(
     "update runs set review_posted_at = now() where id = $1 and review_posted_at is null returning id",
@@ -135,7 +140,6 @@ export async function postReview(
   );
   if (locked.length === 0) return { posted: false, payload };
 
-  const gh = octokit();
   let reviewId: number;
   try {
     const { data } = await gh.pulls.createReview(payload);

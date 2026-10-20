@@ -1,9 +1,14 @@
 // POST /api/findings/{id}/decision with { decision: "bug" | "not_bug" } (plan 4.5, 9.4).
 // Stores the decision once, replies in the finding's review thread, and stores a lesson for not_bug.
 // Only the request that wins the update posts on GitHub, so a double click posts once.
+// A finding of a private run needs a session with write access to its repository, and the reply
+// goes out under that person's token (docs/github-access-contract.md section 4). A legacy finding
+// behaves as before.
 import { sql } from "@pinepoint/core";
-import { octokit, type PrRef } from "@pinepoint/github";
+import type { PrRef } from "@pinepoint/github";
 import { decisionReply, replyInThread, type Decision } from "@pinepoint/github/thread";
+import { authorizeFinding, githubForActor, recordAction, ReauthorizeError } from "@/lib/access";
+import { rejectCrossSite } from "@/lib/auth/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +35,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const { id } = await ctx.params;
   if (!UUID.test(id)) {
     return Response.json({ ok: false, error: "Finding not found." }, { status: 404 });
+  }
+  const refused = rejectCrossSite(req);
+  if (refused) return refused;
+  const guarded = await authorizeFinding(req, id, "act");
+  if (!guarded.ok) return guarded.response;
+  let gh;
+  try {
+    gh = await githubForActor(guarded.value);
+  } catch (err) {
+    if (err instanceof ReauthorizeError) return Response.json({ ok: false, error: err.message, state: "reauthorize" }, { status: 403 });
+    throw err;
   }
 
   let body: unknown;
@@ -94,14 +110,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   const decidedAt = new Date(won.decided_at);
+  void recordAction({ action: "decision", runId: guarded.value.run.id, findingId: id, userId: guarded.value.session?.user.id ?? null, detail: { decision } });
   const ref: PrRef = { owner: finding.owner, repo: finding.repo, number: finding.pr_number };
   const reply = decisionReply(decision, decidedAt);
   let replyUrl: string | null = null;
   try {
     if (finding.comment_id !== null) {
-      replyUrl = (await replyInThread(ref, Number(finding.comment_id), reply)).url;
+      replyUrl = (await replyInThread(gh, ref, Number(finding.comment_id), reply)).url;
     } else {
-      const { data } = await octokit().issues.createComment({
+      const { data } = await gh.issues.createComment({
         owner: ref.owner,
         repo: ref.repo,
         issue_number: ref.number,

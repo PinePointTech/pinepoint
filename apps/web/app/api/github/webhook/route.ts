@@ -1,19 +1,28 @@
-// POST /api/github/webhook: start a run by itself when a demo store PR is opened or updated.
+// POST /api/github/webhook: the GitHub App's webhook.
 //
-// Events: pull_request (opened, reopened, synchronize, ready_for_review) and deployment_status
-// (success, not Production). The Vercel preview is usually not ready at pull_request time, so
-// deployment_status is the main trigger. The checks below run before the response, which must go
-// out within GitHub's 10 seconds. In after(): prepareRun reads the PR and saves the run with status
-// `planning`, then planAndDrive plans, starts and drives it (lib/start-run.ts, the same steps as
-// POST /api/runs).
+// Two kinds of event (docs/github-access-contract.md sections 3 and 7):
+//
+//   Lifecycle: installation, installation_repositories, github_app_authorization. They keep the
+//   workspace, installation and repository rows and the credentials in step with GitHub. Each
+//   delivery id applies once.
+//
+//   Demo auto-start: pull_request (opened, reopened, synchronize, ready_for_review) and
+//   deployment_status (success, not Production) start a legacy run for the public demo
+//   repositories (PINEPOINT_DEMO_REPOS) only. A connected repository never starts a run from a
+//   webhook: v1 is manual runs only (VI-37 is deferred). The Vercel preview is usually not ready at
+//   pull_request time, so deployment_status is the main trigger. The checks below run before the
+//   response, which must go out within GitHub's 10 seconds. In after(): prepareRun reads the PR and
+//   saves the run with status `planning`, then planAndDrive plans, starts and drives it.
 //
 //   401  no GITHUB_WEBHOOK_SECRET, or a bad X-Hub-Signature-256
-//   200  ping, or skipped with a reason (other paths, a run exists, not the PR head, ...)
+//   200  ping, a lifecycle event applied, or skipped with a reason (other paths, a run exists, ...)
 //   202  waiting for the preview, or the run is starting
 
 import { after } from "next/server";
 import { octokit, prUrl } from "@pinepoint/github";
 import { findPreviewUrl } from "@pinepoint/github/context";
+import { applyLifecycleEvent, parseLifecycleEvent, recordDelivery } from "@pinepoint/github/installations";
+import { isDemoRepo } from "@/lib/demo-repos";
 import {
   PR_ACTIONS,
   isDemoPreviewEnvironment,
@@ -91,6 +100,7 @@ async function startAndDrive(target: ClaimTarget, sliceEndsAt: number): Promise<
     // keeps it from starting a second run next to one that a person started on /app meanwhile.
     const outcome = await prepareRun({
       prUrl: prUrl(target),
+      gh: octokit(),
       noPreview: "skip",
       expectHeadSha: target.headSha,
     });
@@ -126,7 +136,8 @@ export async function POST(request: Request) {
 
   const event = request.headers.get("x-github-event");
   if (event === "ping") return json({ ok: true, pong: true });
-  if (event !== "pull_request" && event !== "deployment_status") {
+  const lifecycle = event === "installation" || event === "installation_repositories" || event === "github_app_authorization";
+  if (!lifecycle && event !== "pull_request" && event !== "deployment_status") {
     return json({ ok: true, skipped: `Event "${event}" is not handled.` });
   }
 
@@ -137,6 +148,23 @@ export async function POST(request: Request) {
     return json({ error: "The body is not JSON. Set the content type to application/json." }, 400);
   }
 
+  if (lifecycle) {
+    const parsed = parseLifecycleEvent(event, payload);
+    try {
+      const action = (payload as { action?: string }).action ?? null;
+      if (!(await recordDelivery(request.headers.get("x-github-delivery"), event, action))) {
+        return json({ ok: true, event, skipped: "This delivery was applied before." });
+      }
+      const note = await applyLifecycleEvent(parsed);
+      console.log(`[webhook] ${event}: ${note}`);
+      return json({ ok: true, event, applied: note });
+    } catch (err) {
+      // The message only, never the payload: an installation payload names people and repositories.
+      console.error(`[webhook] ${event} failed: ${(err as Error).message}`);
+      return json({ error: "Could not apply the event." }, 500);
+    }
+  }
+
   try {
     const gh = octokit();
     const target =
@@ -144,6 +172,12 @@ export async function POST(request: Request) {
         ? fromPullRequest(payload as PullRequestPayload)
         : await fromDeploymentStatus(payload as DeploymentStatusPayload, gh);
     if ("skip" in target) return json({ ok: true, event, skipped: target.skip });
+
+    // Manual runs only for connected repositories (v1). Only the public demo starts by itself,
+    // and it is the only place the shared token reads a PR from a webhook.
+    if (!isDemoRepo(target.owner, target.repo)) {
+      return json({ ok: true, event, pr: target.number, skipped: "Runs on connected repositories start from the app, not from webhooks." });
+    }
 
     const ref = { owner: target.owner, repo: target.repo, number: target.number };
     const prefixes = webhookPaths();
@@ -161,7 +195,7 @@ export async function POST(request: Request) {
       return json({ ok: true, event, pr: target.number, skipped: "A run exists for this commit.", runId: existing.id, status: existing.status });
     }
 
-    if (!(await findPreviewUrl(gh, ref, target.headSha))) {
+    if (!(await findPreviewUrl(gh, ref, target.headSha, null))) {
       return json({ ok: true, event, pr: target.number, waiting: "No preview yet. A deployment_status event will start the run." }, 202);
     }
 

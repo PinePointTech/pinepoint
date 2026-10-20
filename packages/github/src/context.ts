@@ -1,7 +1,7 @@
 // Read the PR: diff, changed files, preview URL and qa.md (plan section 7).
 
 import type { Octokit } from "@octokit/rest";
-import { octokit, parsePrUrl, prUrl } from "./client";
+import { parsePrUrl, prUrl, type PrRef } from "./client";
 
 export interface PrChangedFile {
   path: string;
@@ -19,6 +19,12 @@ export interface PrContext {
   url: string;
   title: string;
   headSha: string;
+  /** The base branch's SHA at read time. The trusted ref for a fork PR's QA file. */
+  baseSha: string;
+  /** True when the head lives in another repository (a fork PR). */
+  isFork: boolean;
+  /** The id of the base repository, for the stable-id check against repositories.github_repo_id. */
+  repoId: number;
   /** The PR author's login. */
   author: string;
   /** The unified diff (Accept: application/vnd.github.v3.diff). */
@@ -27,8 +33,25 @@ export interface PrContext {
   /** The Vercel preview URL for the head SHA, or null when no successful deployment exists. */
   previewUrl: string | null;
   productionUrl: string | null;
-  /** apps/demo-store/qa.md at the head SHA, or null when it does not exist. */
+  /** The QA file at the trusted ref (qaRef), or null when it does not exist. */
   qaMd: string | null;
+  /** Where qaMd came from: the head SHA for a same-repository PR, the base SHA for a fork PR. */
+  qaRef: string;
+  qaPath: string;
+}
+
+/**
+ * What a repository tells intake (docs/github-access-contract.md, VI-34). The legacy demo
+ * configuration comes from the env (legacyRepoQaConfig); a connected repository's comes from
+ * repository_settings.
+ */
+export interface RepoQaConfig {
+  /** The QA instructions file, relative to the repository root. */
+  qaMdPath: string;
+  /** The Vercel project whose preview to test. Null matches any non-production deployment. */
+  previewProjectName: string | null;
+  /** The production URL for the old-bug comparison. Null skips it. */
+  productionUrl: string | null;
 }
 
 export const QA_MD_PATH = "apps/demo-store/qa.md";
@@ -37,6 +60,27 @@ export const MAX_CONTENT_BYTES = 200 * 1024;
 
 function demoProjectName(): string {
   return process.env.VERCEL_DEMO_PROJECT_NAME ?? "pinepoint-demo-store";
+}
+
+/** The demo store's configuration from the env. Only legacy runs use it. */
+export function legacyRepoQaConfig(): RepoQaConfig {
+  return {
+    qaMdPath: QA_MD_PATH,
+    previewProjectName: demoProjectName(),
+    // An empty value counts as unset. The production run (and the old_bug level) needs a real URL.
+    productionUrl: process.env.DEMO_PRODUCTION_URL || null,
+  };
+}
+
+/**
+ * True when a deployment environment is the preview of the wanted project. With a project name,
+ * the environment must contain it. Without one, any environment that is not production matches.
+ * Vercel names them "Preview – <project>" and "Production – <project>".
+ */
+export function environmentMatches(environment: string | null | undefined, projectName: string | null): boolean {
+  if (!environment) return false;
+  if (/production/i.test(environment)) return false;
+  return projectName === null || environment.includes(projectName);
 }
 
 function isNotFound(err: unknown): boolean {
@@ -61,14 +105,14 @@ export async function readFileAt(
 }
 
 /**
- * The preview URL for a SHA: the newest deployment whose environment contains the demo
- * project name, then its first status with state "success".
+ * The preview URL for a SHA: the newest deployment whose environment matches the project
+ * (environmentMatches), then its first status with state "success".
  */
 export async function findDeploymentPreviewUrl(
   gh: Octokit,
   ref: { owner: string; repo: string },
   sha: string,
-  projectName = demoProjectName(),
+  projectName: string | null = demoProjectName(),
 ): Promise<string | null> {
   const { data: deployments } = await gh.repos.listDeployments({
     owner: ref.owner,
@@ -77,7 +121,7 @@ export async function findDeploymentPreviewUrl(
     per_page: 100,
   });
   const matches = deployments
-    .filter((d) => d.environment.includes(projectName))
+    .filter((d) => environmentMatches(d.environment, projectName))
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   const newest = matches[0];
   if (!newest) return null;
@@ -106,7 +150,7 @@ export async function findVercelCommentPreviewUrl(
   gh: Octokit,
   ref: { owner: string; repo: string; number: number },
   sha: string,
-  projectName = demoProjectName(),
+  projectName: string | null = demoProjectName(),
 ): Promise<string | null> {
   const { data: combined } = await gh.repos.getCombinedStatusForRef({
     owner: ref.owner,
@@ -114,7 +158,9 @@ export async function findVercelCommentPreviewUrl(
     ref: sha,
     per_page: 100,
   });
-  const ok = combined.statuses.some((s) => s.context.includes(projectName) && s.state === "success");
+  const ok = combined.statuses.some(
+    (s) => s.state === "success" && (projectName === null ? /vercel/i.test(s.context) : s.context.includes(projectName)),
+  );
   if (!ok) return null;
 
   const { data: comments } = await gh.issues.listComments({
@@ -131,7 +177,7 @@ export async function findVercelCommentPreviewUrl(
       const payload = JSON.parse(Buffer.from(m[1]!, "base64").toString("utf8")) as {
         projects?: Array<{ name?: string; previewUrl?: string; nextCommitStatus?: string }>;
       };
-      const project = payload.projects?.find((p) => p.name === projectName);
+      const project = payload.projects?.find((p) => (projectName === null ? p.nextCommitStatus === "DEPLOYED" : p.name === projectName));
       if (project?.previewUrl && project.nextCommitStatus === "DEPLOYED") {
         return project.previewUrl.startsWith("http") ? project.previewUrl : `https://${project.previewUrl}`;
       }
@@ -147,7 +193,7 @@ export async function findPreviewUrl(
   gh: Octokit,
   ref: { owner: string; repo: string; number: number },
   sha: string,
-  projectName = demoProjectName(),
+  projectName: string | null = demoProjectName(),
 ): Promise<string | null> {
   return (
     (await findDeploymentPreviewUrl(gh, ref, sha, projectName)) ??
@@ -232,20 +278,58 @@ export async function getPrDiff(gh: Octokit, ref: { owner: string; repo: string;
   return res.data as unknown as string;
 }
 
-/** Reads all that the planner and the runner need from a PR. */
-export async function getPrContext(url: string, gh: Octokit = octokit()): Promise<PrContext> {
+/** The small part of GET /pulls/{n} that preflight shows before a run: head, base, fork, state. */
+export interface PrHead {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  draft: boolean;
+  headSha: string;
+  headRef: string;
+  baseSha: string;
+  isFork: boolean;
+  repoId: number;
+  author: string;
+  url: string;
+}
+
+export async function getPrHead(gh: Octokit, ref: PrRef): Promise<PrHead> {
+  const { data: pr } = await gh.pulls.get({ owner: ref.owner, repo: ref.repo, pull_number: ref.number });
+  return {
+    number: pr.number,
+    title: pr.title,
+    state: pr.state === "open" ? "open" : "closed",
+    draft: Boolean(pr.draft),
+    headSha: pr.head.sha,
+    headRef: pr.head.ref,
+    baseSha: pr.base.sha,
+    isFork: pr.head.repo?.id !== undefined && pr.head.repo?.id !== pr.base.repo.id,
+    repoId: pr.base.repo.id,
+    author: pr.user?.login ?? "",
+    url: pr.html_url,
+  };
+}
+
+/**
+ * Reads all that the planner and the runner need from a PR, as `gh`, with the repository's
+ * configuration. `gh` has no default: the caller chooses the credential (contract section 4).
+ * The QA file is read at the head for a same-repository PR and at the base for a fork PR, so a
+ * fork cannot rewrite the instructions the Computers follow.
+ */
+export async function getPrContext(url: string, gh: Octokit, config: RepoQaConfig = legacyRepoQaConfig()): Promise<PrContext> {
   const ref = parsePrUrl(url);
   const { owner, repo, number } = ref;
 
-  const { data: pr } = await gh.pulls.get({ owner, repo, pull_number: number });
-  const headSha = pr.head.sha;
+  const head = await getPrHead(gh, ref);
+  const headSha = head.headSha;
+  const qaRef = head.isFork ? head.baseSha : headSha;
 
   const diff = await getPrDiff(gh, ref);
 
   const [changedFiles, previewUrl, qaBuf] = await Promise.all([
     listChangedFiles(gh, ref),
-    findPreviewUrl(gh, ref, headSha),
-    readFileAt(gh, ref, QA_MD_PATH, headSha),
+    findPreviewUrl(gh, ref, headSha, config.previewProjectName),
+    readFileAt(gh, ref, config.qaMdPath, qaRef),
   ]);
   await fillContent(gh, ref, changedFiles, headSha);
 
@@ -254,14 +338,18 @@ export async function getPrContext(url: string, gh: Octokit = octokit()): Promis
     repo,
     number,
     url: prUrl(ref),
-    title: pr.title,
+    title: head.title,
     headSha,
-    author: pr.user?.login ?? "",
+    baseSha: head.baseSha,
+    isFork: head.isFork,
+    repoId: head.repoId,
+    author: head.author,
     diff,
     changedFiles,
     previewUrl,
-    // An empty value counts as unset. The production run (and the old_bug level) needs a real URL.
-    productionUrl: process.env.DEMO_PRODUCTION_URL || null,
+    productionUrl: config.productionUrl,
     qaMd: qaBuf ? qaBuf.toString("utf8") : null,
+    qaRef,
+    qaPath: config.qaMdPath,
   };
 }

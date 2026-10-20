@@ -41,6 +41,8 @@ const log = (...parts: unknown[]) => {
 const started = Date.now();
 const attempts: string[] = [];
 const result = await fixFinding(values.finding, {
+  // The script works on legacy demo findings, so the shared token is the right client here.
+  gh: octokit(),
   force: values.force,
   dryRun: values["dry-run"],
   onAttempt: ({ attempt, error }) => attempts.push(error ? `attempt ${attempt}: did not validate\n${error}` : `attempt ${attempt}: valid`),

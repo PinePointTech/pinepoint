@@ -1,6 +1,7 @@
 // Usage: pnpm --filter @pinepoint/github test:intake -- <PR URL>
 // Reads the PR with getPrContext and prints a summary and the VI-11 acceptance checks.
 
+import { octokit } from "../src/client";
 import { getPrContext } from "../src/context";
 
 const url = process.argv.slice(2).find((a) => a !== "--");
@@ -9,7 +10,8 @@ if (!url) {
   process.exit(2);
 }
 
-const ctx = await getPrContext(url);
+// A script for the legacy demo repository, so the shared token and the demo configuration apply.
+const ctx = await getPrContext(url, octokit());
 
 console.log(`title:         ${ctx.title}`);
 console.log(`headSha:       ${ctx.headSha}`);

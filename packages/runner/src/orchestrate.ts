@@ -49,6 +49,7 @@ import {
   uploadScreenshot,
   collectStepShots,
 } from "./pine";
+import { releaseRunSlots } from "./admission";
 import { dropStartLease, LeaseUnavailableError, takeStartLease } from "./start-lease";
 import { runStartPool, type StartOutcome } from "./start-pool";
 
@@ -77,6 +78,27 @@ export type RunCompleteHook = (runId: string) => Promise<void>;
 let runCompleteHook: RunCompleteHook = async () => undefined;
 export function setRunCompleteHook(hook: RunCompleteHook): void {
   runCompleteHook = hook;
+}
+
+/**
+ * Runs before each batch of Computer starts of a private run (docs/github-access-contract.md
+ * section 4, recheck 2): the initiator's repository access is resolved again, because a start is
+ * where money is spent. `{ ok: false }` fails the run with `reason`. A legacy run (no workspace)
+ * is not gated. apps/web/lib/run-hooks.ts registers the check; without one, a private run never
+ * starts a Computer (fail closed).
+ */
+export type RunAccessHook = (run: RunRow) => Promise<{ ok: true } | { ok: false; reason: string }>;
+let runAccessHook: RunAccessHook = async (run) => ({
+  ok: false,
+  reason: `No access check is registered for private run ${run.id}.`,
+});
+export function setRunAccessHook(hook: RunAccessHook): void {
+  runAccessHook = hook;
+}
+
+/** The runs.error text when the initiator lost access mid-run. */
+export function accessLostError(repo: string, reason: string): string {
+  return `Access to ${repo} was lost: ${reason}`.replace(/:\s*$/, ".");
 }
 
 // ---------- reads ----------
@@ -238,6 +260,19 @@ async function fillSlots(run: RunRow): Promise<number> {
     const [limit, inUse] = await Promise.all([concurrencyLimit(), computersInUse()]);
     const n = slotsToFill(limit, inUse);
     if (n === 0) return 0;
+    if (run.workspace_id) {
+      // A private run: ask again before spending. A failed check is not access.
+      let verdict: Awaited<ReturnType<RunAccessHook>>;
+      try {
+        verdict = await runAccessHook(run);
+      } catch (err) {
+        verdict = { ok: false, reason: `the access check failed (${(err as Error).message})` };
+      }
+      if (!verdict.ok) {
+        await failRun(run.id, accessLostError(`${run.owner}/${run.repo}`, verdict.reason), "running");
+        return 0;
+      }
+    }
     const claimed = await claimQueued(run.id, n);
     if (claimed.length === 0) return 0;
     return await startClaimed(run, claimed);
@@ -288,7 +323,17 @@ export async function failRun(runId: string, error: string, from: RunStatus): Pr
       returning id
     `,
   );
+  if (rows.length > 0) await freeSlotsOf(runId);
   return rows.length > 0;
+}
+
+/** Frees the run's quota slots (admission.ts). Logs and never throws: a slot leak is healed by releaseStaleSlots later. */
+async function freeSlotsOf(runId: string): Promise<void> {
+  try {
+    await releaseRunSlots(runId);
+  } catch (err) {
+    console.warn(`[runner] could not release the quota slots of run ${runId}: ${(err as Error).message}`);
+  }
 }
 
 // ---------- advancing ----------
@@ -446,6 +491,7 @@ async function completeRun(runId: string): Promise<void> {
   try {
     await runCompleteHook(runId);
     await sql()`update runs set status = 'done', finished_at = now() where id = ${runId} and status = 'reporting'`;
+    await freeSlotsOf(runId);
   } catch (err) {
     console.error(`[runner] completion hook failed for run ${runId}: ${(err as Error).message}`);
     await failRun(runId, runErrorText("Reporting failed", err), "reporting");
