@@ -21,6 +21,14 @@ export function addItem(cart: Cart, productId: string): Cart {
   return { ...cart, lines };
 }
 
+// Take one unit off a cart line.
+export function removeOne(cart: Cart, productId: string): Cart {
+  const lines = cart.lines.map((l) =>
+    l.productId === productId ? { ...l, quantity: l.quantity - 1 } : l,
+  );
+  return { ...cart, lines };
+}
+
 export function removeItem(cart: Cart, productId: string): Cart {
   return { ...cart, lines: cart.lines.filter((l) => l.productId !== productId) };
 }

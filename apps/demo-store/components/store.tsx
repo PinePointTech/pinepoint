@@ -9,6 +9,7 @@ import {
   emptyCart,
   formatPrice,
   removeItem,
+  removeOne,
   totals,
   type Cart,
 } from "@/lib/cart";
@@ -69,6 +70,22 @@ export function Store() {
                     {product.name} x {line.quantity}
                   </span>
                   <span>{formatPrice(product.priceCents * line.quantity)}</span>
+                  <span className="stepper">
+                    <button
+                      type="button"
+                      aria-label={`Remove one ${product.name}`}
+                      onClick={() => setCart((c) => removeOne(c, product.id))}
+                    >
+                      -
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Add one ${product.name}`}
+                      onClick={() => setCart((c) => addItem(c, product.id))}
+                    >
+                      +
+                    </button>
+                  </span>
                   <button
                     type="button"
                     className="link"
