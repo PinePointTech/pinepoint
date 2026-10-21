@@ -8,6 +8,7 @@ import {
   applyCoupon,
   emptyCart,
   formatPrice,
+  itemCount,
   removeItem,
   totals,
   type Cart,
@@ -104,6 +105,8 @@ export function Store() {
         </form>
 
         <dl className="totals">
+          <dt>Items</dt>
+          <dd data-testid="items">{itemCount(cart)}</dd>
           <dt>Subtotal</dt>
           <dd data-testid="subtotal">{formatPrice(t.subtotalCents)}</dd>
           <dt>Discount</dt>
