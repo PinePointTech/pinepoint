@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { products, findProduct } from "@/lib/products";
 import {
   addItem,
   applyCoupon,
+  clearSavedCart,
   emptyCart,
   formatPrice,
+  loadSavedCart,
   removeItem,
+  saveCart,
   totals,
   type Cart,
 } from "@/lib/cart";
@@ -16,9 +19,23 @@ import {
 export function Store() {
   const router = useRouter();
   const [cart, setCart] = useState<Cart>(emptyCart);
+  const [loaded, setLoaded] = useState(false);
   const [code, setCode] = useState("");
   const [message, setMessage] = useState("");
   const t = totals(cart);
+
+  // Load the saved cart one time, after the first render. The server
+  // cannot read localStorage, so the first render has an empty cart.
+  useEffect(() => {
+    setCart(loadSavedCart());
+    setLoaded(true);
+  }, []);
+
+  // Save the cart after each change. Wait for the load, or the empty
+  // first cart replaces the saved cart.
+  useEffect(() => {
+    if (loaded) saveCart(cart);
+  }, [cart, loaded]);
 
   function onApply(event: React.FormEvent) {
     event.preventDefault();
@@ -29,6 +46,7 @@ export function Store() {
   }
 
   function onPlaceOrder() {
+    clearSavedCart();
     router.push(`/order?total=${encodeURIComponent(formatPrice(t.totalCents))}`);
   }
 
